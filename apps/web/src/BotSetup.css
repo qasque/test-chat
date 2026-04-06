@@ -1,0 +1,34 @@
+.bot-setup .field {
+  margin-bottom: 1rem;
+}
+
+.bot-setup label {
+  display: block;
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 0.35rem;
+}
+
+.bot-setup input {
+  width: 100%;
+  max-width: 420px;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  background: #0d1117;
+  color: #e6edf3;
+  font-size: 0.9rem;
+}
+
+.bot-setup .btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 1rem 0;
+}
+
+.bot-setup .success {
+  color: #3fb950;
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}

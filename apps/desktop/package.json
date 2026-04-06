@@ -1,0 +1,40 @@
+{
+  "name": "support-portal-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Десктопный клиент портала поддержки (Electron)",
+  "author": "Support Stack",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build:web": "cd ../web && npm ci && npm run build",
+    "copy:web": "node scripts/copy-web.cjs",
+    "start": "electron .",
+    "dev": "cross-env ELECTRON_DEV=1 electron .",
+    "pack": "npm run build:web && npm run copy:web && electron-builder --win dir",
+    "dist": "npm run build:web && npm run copy:web && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.chatwootstack.supportportal",
+    "productName": "Портал поддержки",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*"
+    ],
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  }
+}

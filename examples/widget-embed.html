@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Пример: виджет Chatwoot в ЛК / на сайте</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Замените YOUR_WEBSITE_TOKEN на токен из настроек Website Inbox в Chatwoot.
+      baseUrl — публичный URL вашего Chatwoot (тот же, что FRONTEND_URL).
+    -->
+  </head>
+  <body>
+    <h1>Личный кабинет (пример)</h1>
+    <p>После загрузки страницы откроется виджет поддержки.</p>
+
+    <script>
+      (function (d, t) {
+        var BASE_URL = "https://your-chatwoot.example.com";
+        var g = d.createElement(t),
+          s = d.getElementsByTagName(t)[0];
+        g.src = BASE_URL + "/packs/js/sdk.js";
+        g.defer = true;
+        g.async = true;
+        s.parentNode.insertBefore(g, s);
+        g.onload = function () {
+          window.chatwootSDK.run({
+            websiteToken: "YOUR_WEBSITE_TOKEN",
+            baseUrl: BASE_URL,
+          });
+          // Идентификация пользователя из сессии ЛК (опционально):
+          window.$chatwoot.setUser("user-123", {
+            email: "user@example.com",
+            name: "Иван Примеров",
+          });
+        };
+      })(document, "script");
+    </script>
+  </body>
+</html>

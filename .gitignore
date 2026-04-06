@@ -1,0 +1,26 @@
+# Секреты и локальные env-файлы — в репозиторий только .env.example
+.env
+.env.*
+!.env.example
+*.pem
+*.ppk
+
+# Markdown не включаем в origin (локально файлы остаются)
+*.md
+
+# IDE / служебное
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+*.tmp
+.ssh-key-check.tmp
+
+bridge/node_modules/
+telegram-demo-bot/node_modules/
+apps/web/node_modules/
+apps/web/dist/
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/release/
+*.log
