@@ -200,6 +200,34 @@ function extractWebhookMessageId(reqBody, message) {
   return Number.isFinite(Number(id)) ? Number(id) : null;
 }
 
+/**
+ * В UI Chatwoot «удаление» сообщения — это update с content_attributes.deleted=true
+ * (см. MessagesController#destroy), webhook: message_updated, не message_deleted.
+ */
+function isMessageSoftDeleted(message) {
+  const ca = message?.content_attributes;
+  if (!ca || typeof ca !== "object") return false;
+  return ca.deleted === true || ca.deleted === "true";
+}
+
+async function syncDeleteMessageToTelegram(chatwootMessageId, botsMap) {
+  const link = store.getByChatwootMessageId(chatwootMessageId);
+  if (!link?.telegram_message_id || !link?.bot_key) {
+    return { ok: true, skipped: "no_link" };
+  }
+  const cfg = botsMap[link.bot_key];
+  if (!cfg?.token) {
+    return { ok: false, error: "missing_bot_token" };
+  }
+  await deleteTelegramMessage(
+    cfg.token,
+    link.chat_id,
+    link.telegram_message_id
+  );
+  store.deleteByChatwootMessageId(chatwootMessageId);
+  return { ok: true, deleted: true };
+}
+
 async function downloadTelegramMedia(token, media) {
   const fileId = media?.fileId;
   if (!fileId) {
@@ -492,46 +520,63 @@ app.post("/admin/test-incoming", requireAdminSecret, async (req, res) => {
 });
 
 /**
- * Webhook Chatwoot: Settings → Integrations → Webhooks → message_created
+ * Webhook Chatwoot: message_created (+ опционально message_deleted),
+ * а также message_updated при soft-delete (content_attributes.deleted).
  */
 app.post(
   "/chatwoot/webhook",
+  (req, res, next) => {
+    const ev = req.body?.event;
+    const msg = req.body?.message || req.body;
+    console.log("[chatwoot webhook]", ev, {
+      cwMessageId: msg?.id ?? req.body?.id,
+      softDeleted: isMessageSoftDeleted(msg),
+    });
+    next();
+  },
   verifyChatwootWebhook,
   async (req, res) => {
     try {
       const event = req.body?.event;
-      if (event !== "message_created" && event !== "message_deleted") {
+      if (
+        event !== "message_created" &&
+        event !== "message_deleted" &&
+        event !== "message_updated"
+      ) {
         return res.status(200).json({ ignored: true });
       }
 
       const message = req.body.message || req.body;
       const botsMap = getBots();
 
-      if (event === "message_deleted") {
+      const shouldSyncDelete =
+        event === "message_deleted" ||
+        (event === "message_updated" && isMessageSoftDeleted(message));
+
+      if (shouldSyncDelete) {
         const chatwootMessageId = extractWebhookMessageId(req.body, message);
         if (!chatwootMessageId) {
           return res.status(200).json({ ok: false, error: "missing_message_id" });
         }
-        const link = store.getByChatwootMessageId(chatwootMessageId);
-        if (!link?.telegram_message_id || !link?.bot_key) {
-          return res.status(200).json({ ok: true, skipped: "no_link" });
-        }
-        const cfg = botsMap[link.bot_key];
-        if (!cfg?.token) {
-          return res.status(200).json({ ok: false, error: "missing_bot_token" });
-        }
         try {
-          await deleteTelegramMessage(
-            cfg.token,
-            link.chat_id,
-            link.telegram_message_id
+          const result = await syncDeleteMessageToTelegram(
+            chatwootMessageId,
+            botsMap
           );
-          store.deleteByChatwootMessageId(chatwootMessageId);
-          return res.json({ ok: true, deleted: true });
+          if (result.skipped) {
+            console.log("[chatwoot webhook] delete skipped:", result.skipped);
+          }
+          return res.status(200).json(result);
         } catch (deleteErr) {
           console.warn("Telegram delete failed:", deleteErr.message);
-          return res.status(200).json({ ok: false, error: "telegram_delete_failed" });
+          return res
+            .status(200)
+            .json({ ok: false, error: "telegram_delete_failed" });
         }
+      }
+
+      if (event !== "message_created") {
+        return res.status(200).json({ ignored: true });
       }
 
       const conversationId =
