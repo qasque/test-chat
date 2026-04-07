@@ -190,6 +190,16 @@ function extractChatwootMessageId(apiResult) {
   return Number.isFinite(Number(id)) ? Number(id) : null;
 }
 
+function extractWebhookMessageId(reqBody, message) {
+  const id =
+    message?.id ??
+    reqBody?.id ??
+    reqBody?.message_id ??
+    reqBody?.message?.id ??
+    reqBody?.payload?.id;
+  return Number.isFinite(Number(id)) ? Number(id) : null;
+}
+
 async function downloadTelegramMedia(token, media) {
   const fileId = media?.fileId;
   if (!fileId) {
@@ -495,6 +505,35 @@ app.post(
       }
 
       const message = req.body.message || req.body;
+      const botsMap = getBots();
+
+      if (event === "message_deleted") {
+        const chatwootMessageId = extractWebhookMessageId(req.body, message);
+        if (!chatwootMessageId) {
+          return res.status(200).json({ ok: false, error: "missing_message_id" });
+        }
+        const link = store.getByChatwootMessageId(chatwootMessageId);
+        if (!link?.telegram_message_id || !link?.bot_key) {
+          return res.status(200).json({ ok: true, skipped: "no_link" });
+        }
+        const cfg = botsMap[link.bot_key];
+        if (!cfg?.token) {
+          return res.status(200).json({ ok: false, error: "missing_bot_token" });
+        }
+        try {
+          await deleteTelegramMessage(
+            cfg.token,
+            link.chat_id,
+            link.telegram_message_id
+          );
+          store.deleteByChatwootMessageId(chatwootMessageId);
+          return res.json({ ok: true, deleted: true });
+        } catch (deleteErr) {
+          console.warn("Telegram delete failed:", deleteErr.message);
+          return res.status(200).json({ ok: false, error: "telegram_delete_failed" });
+        }
+      }
+
       const conversationId =
         message.conversation?.id ?? message.conversation_id ?? req.body.conversation?.id;
       if (conversationId == null) {
@@ -504,31 +543,10 @@ app.post(
       if (!thread) {
         return res.status(200).json({ unknownThread: true });
       }
-      const botsMap = getBots();
       const cfg = botsMap[thread.bot_key];
       if (!cfg?.token) {
         console.warn("Нет token для bot_key", thread.bot_key);
         return res.status(200).json({ skipped: true });
-      }
-
-      if (event === "message_deleted") {
-        const chatwootMessageId = Number(message.id || req.body.id);
-        const link = store.getByChatwootMessageId(chatwootMessageId);
-        if (!link?.telegram_message_id) {
-          return res.status(200).json({ ok: true, skipped: "no_link" });
-        }
-        try {
-          await deleteTelegramMessage(
-            cfg.token,
-            thread.chat_id,
-            link.telegram_message_id
-          );
-          store.deleteByChatwootMessageId(chatwootMessageId);
-          return res.json({ ok: true, deleted: true });
-        } catch (deleteErr) {
-          console.warn("Telegram delete failed:", deleteErr.message);
-          return res.status(200).json({ ok: false, error: "telegram_delete_failed" });
-        }
       }
 
       if (message.private === true || message.content_attributes?.private) {
