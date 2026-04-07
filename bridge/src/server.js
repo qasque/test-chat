@@ -143,7 +143,8 @@ app.get("/health", allowHealthCors, (_req, res) => {
 
 async function sendTelegramMessage(token, chatId, text) {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  await axios.post(url, { chat_id: chatId, text });
+  const { data } = await axios.post(url, { chat_id: chatId, text });
+  return data?.result?.message_id ?? null;
 }
 
 async function sendTelegramMedia(token, chatId, attachment, caption) {
@@ -163,12 +164,30 @@ async function sendTelegramMedia(token, chatId, attachment, caption) {
       ? "audio"
       : "document";
   const url = `https://api.telegram.org/bot${token}/${endpoint}`;
-  await axios.post(url, {
+  const { data } = await axios.post(url, {
     chat_id: chatId,
     [field]: dataUrl,
     caption: caption || undefined,
   });
-  return true;
+  return data?.result?.message_id ?? null;
+}
+
+async function deleteTelegramMessage(token, chatId, telegramMessageId) {
+  const url = `https://api.telegram.org/bot${token}/deleteMessage`;
+  const { data } = await axios.post(url, {
+    chat_id: chatId,
+    message_id: Number(telegramMessageId),
+  });
+  return data?.ok === true;
+}
+
+function extractChatwootMessageId(apiResult) {
+  const id =
+    apiResult?.id ??
+    apiResult?.message?.id ??
+    apiResult?.payload?.id ??
+    apiResult?.payload?.message?.id;
+  return Number.isFinite(Number(id)) ? Number(id) : null;
 }
 
 async function downloadTelegramMedia(token, media) {
@@ -216,7 +235,8 @@ async function downloadTelegramMedia(token, media) {
 }
 
 async function processTelegramIncoming(body, botsMap) {
-  const { botKey, chatId, text, media, userId, username, name } = body || {};
+  const { botKey, chatId, text, media, userId, username, name, telegramMessageId } =
+    body || {};
   if (!botKey || chatId == null || !text) {
     const err = new Error("Нужны поля botKey, chatId, text");
     err.status = 400;
@@ -291,14 +311,25 @@ async function processTelegramIncoming(body, botsMap) {
   }
 
   const normalizedText = String(text);
+  let created;
   if (media?.fileId) {
     const downloaded = await downloadTelegramMedia(cfg.token, media);
-    await cw.createMessageWithAttachment(thread.conversation_id, {
+    created = await cw.createMessageWithAttachment(thread.conversation_id, {
       content: normalizedText,
       ...downloaded,
     });
   } else {
-    await cw.createMessage(thread.conversation_id, normalizedText);
+    created = await cw.createMessage(thread.conversation_id, normalizedText);
+  }
+  const chatwootMessageId = extractChatwootMessageId(created);
+  if (chatwootMessageId && telegramMessageId != null) {
+    store.saveMessageLink({
+      chatwoot_message_id: chatwootMessageId,
+      bot_key: botKey,
+      chat_id: chatId,
+      telegram_message_id: telegramMessageId,
+      conversation_id: thread.conversation_id,
+    });
   }
   return { conversationId: thread.conversation_id };
 }
@@ -459,11 +490,47 @@ app.post(
   async (req, res) => {
     try {
       const event = req.body?.event;
-      if (event !== "message_created") {
+      if (event !== "message_created" && event !== "message_deleted") {
         return res.status(200).json({ ignored: true });
       }
 
       const message = req.body.message || req.body;
+      const conversationId =
+        message.conversation?.id ?? message.conversation_id ?? req.body.conversation?.id;
+      if (conversationId == null) {
+        return res.status(200).json({ ignored: true });
+      }
+      const thread = store.getByConversation(Number(conversationId));
+      if (!thread) {
+        return res.status(200).json({ unknownThread: true });
+      }
+      const botsMap = getBots();
+      const cfg = botsMap[thread.bot_key];
+      if (!cfg?.token) {
+        console.warn("Нет token для bot_key", thread.bot_key);
+        return res.status(200).json({ skipped: true });
+      }
+
+      if (event === "message_deleted") {
+        const chatwootMessageId = Number(message.id || req.body.id);
+        const link = store.getByChatwootMessageId(chatwootMessageId);
+        if (!link?.telegram_message_id) {
+          return res.status(200).json({ ok: true, skipped: "no_link" });
+        }
+        try {
+          await deleteTelegramMessage(
+            cfg.token,
+            thread.chat_id,
+            link.telegram_message_id
+          );
+          store.deleteByChatwootMessageId(chatwootMessageId);
+          return res.json({ ok: true, deleted: true });
+        } catch (deleteErr) {
+          console.warn("Telegram delete failed:", deleteErr.message);
+          return res.status(200).json({ ok: false, error: "telegram_delete_failed" });
+        }
+      }
+
       if (message.private === true || message.content_attributes?.private) {
         return res.status(200).json({ ignored: true });
       }
@@ -476,38 +543,43 @@ app.post(
       const attachments = Array.isArray(message.attachments)
         ? message.attachments
         : [];
-      const conversationId =
-        message.conversation?.id ?? message.conversation_id ?? req.body.conversation?.id;
-
       if ((!content && attachments.length === 0) || conversationId == null) {
         return res.status(200).json({ ignored: true });
       }
 
-      const thread = store.getByConversation(Number(conversationId));
-      if (!thread) {
-        return res.status(200).json({ unknownThread: true });
-      }
-
-      const botsMap = getBots();
-      const cfg = botsMap[thread.bot_key];
-      if (!cfg?.token) {
-        console.warn("Нет token для bot_key", thread.bot_key);
-        return res.status(200).json({ skipped: true });
-      }
-
       try {
         let mediaSent = false;
+        /** @type {number[]} */
+        const sentTelegramMessageIds = [];
         for (const attachment of attachments) {
-          mediaSent =
-            (await sendTelegramMedia(
-              cfg.token,
-              thread.chat_id,
-              attachment,
-              content
-            )) || mediaSent;
+          const sentId = await sendTelegramMedia(
+            cfg.token,
+            thread.chat_id,
+            attachment,
+            content
+          );
+          if (sentId) {
+            sentTelegramMessageIds.push(sentId);
+            mediaSent = true;
+          }
         }
         if (!mediaSent && content) {
-          await sendTelegramMessage(cfg.token, thread.chat_id, content);
+          const sentId = await sendTelegramMessage(cfg.token, thread.chat_id, content);
+          if (sentId) {
+            sentTelegramMessageIds.push(sentId);
+          }
+        }
+        const chatwootMessageId = Number(message.id);
+        if (Number.isFinite(chatwootMessageId)) {
+          for (const telegramMessageId of sentTelegramMessageIds) {
+            store.saveMessageLink({
+              chatwoot_message_id: chatwootMessageId,
+              bot_key: thread.bot_key,
+              chat_id: thread.chat_id,
+              telegram_message_id: telegramMessageId,
+              conversation_id: Number(conversationId),
+            });
+          }
         }
       } catch (sendErr) {
         console.warn("Telegram send failed, в очередь:", sendErr.message);

@@ -41,6 +41,7 @@ async function forwardToBridge(ctx, payload) {
     name:
       [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim() ||
       undefined,
+    telegramMessageId: ctx.message?.message_id,
     ...payload,
   };
 
