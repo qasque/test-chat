@@ -1,4 +1,5 @@
 import axios from "axios";
+import FormData from "form-data";
 
 /**
  * Клиент Platform API Chatwoot v1.
@@ -100,10 +101,35 @@ export function createChatwootClient({ baseUrl, apiAccessToken, accountId }) {
     return data;
   }
 
+  async function createMessageWithAttachment(conversationId, payload) {
+    const form = new FormData();
+    form.append("message_type", "incoming");
+    form.append("private", "false");
+    form.append("content", payload?.content || "");
+    form.append(
+      "attachments[]",
+      payload.buffer,
+      payload.fileName || "attachment.bin"
+    );
+    const { data } = await api.post(
+      `${accountPath}/conversations/${conversationId}/messages`,
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+    return data;
+  }
+
   return {
     getOrCreateContact,
     createConversation,
     listContactConversations,
     createMessage,
+    createMessageWithAttachment,
   };
 }

@@ -25,10 +25,10 @@ if (!token) {
 
 const bot = new Telegraf(token);
 
-async function forwardToBridge(ctx, text) {
+async function forwardToBridge(ctx, payload) {
   const chatId = ctx.chat?.id;
   const user = ctx.from;
-  if (chatId == null || !text) return;
+  if (chatId == null) return;
 
   const headers = { "Content-Type": "application/json" };
   if (secret) headers["X-Bridge-Secret"] = secret;
@@ -41,7 +41,7 @@ async function forwardToBridge(ctx, text) {
     name:
       [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim() ||
       undefined,
-    text,
+    ...payload,
   };
 
   const res = await fetch(`${bridgeUrl}/telegram/incoming`, {
@@ -56,6 +56,60 @@ async function forwardToBridge(ctx, text) {
   }
 }
 
+function buildMediaPayload(ctx) {
+  const voice = ctx.message?.voice;
+  const audio = ctx.message?.audio;
+  const videoNote = ctx.message?.video_note;
+  if (voice) {
+    return {
+      text: "🎤 Голосовое сообщение",
+      media: {
+        type: "voice",
+        fileId: voice.file_id,
+        duration: Number(voice.duration || 0) || undefined,
+        mimeType: voice.mime_type || "audio/ogg",
+        fileSize: Number(voice.file_size || 0) || undefined,
+      },
+    };
+  }
+  if (audio) {
+    return {
+      text: audio.title ? `🎵 Аудио: ${audio.title}` : "🎵 Аудио",
+      media: {
+        type: "audio",
+        fileId: audio.file_id,
+        duration: Number(audio.duration || 0) || undefined,
+        mimeType: audio.mime_type || "audio/mpeg",
+        fileName: audio.file_name || undefined,
+        fileSize: Number(audio.file_size || 0) || undefined,
+      },
+    };
+  }
+  if (videoNote) {
+    return {
+      text: "📹 Видео-заметка",
+      media: {
+        type: "video_note",
+        fileId: videoNote.file_id,
+        duration: Number(videoNote.duration || 0) || undefined,
+        fileSize: Number(videoNote.file_size || 0) || undefined,
+      },
+    };
+  }
+  return null;
+}
+
+async function safeForward(ctx, payload) {
+  try {
+    await forwardToBridge(ctx, payload);
+  } catch (e) {
+    console.error(e);
+    await ctx.reply(
+      "Не удалось отправить сообщение в поддержку. Проверьте мост и TELEGRAM_BOTS_JSON."
+    );
+  }
+}
+
 bot.start(async (ctx) => {
   await ctx.reply(
     "Привет! Напишите сообщение — оно уйдёт операторам в Chatwoot. Ответ придёт сюда же."
@@ -64,14 +118,22 @@ bot.start(async (ctx) => {
 
 bot.on("text", async (ctx) => {
   const text = ctx.message.text;
-  try {
-    await forwardToBridge(ctx, text);
-  } catch (e) {
-    console.error(e);
-    await ctx.reply(
-      "Не удалось отправить сообщение в поддержку. Проверьте мост и TELEGRAM_BOTS_JSON."
-    );
-  }
+  await safeForward(ctx, { text });
+});
+
+bot.on("voice", async (ctx) => {
+  const payload = buildMediaPayload(ctx);
+  if (payload) await safeForward(ctx, payload);
+});
+
+bot.on("audio", async (ctx) => {
+  const payload = buildMediaPayload(ctx);
+  if (payload) await safeForward(ctx, payload);
+});
+
+bot.on("video_note", async (ctx) => {
+  const payload = buildMediaPayload(ctx);
+  if (payload) await safeForward(ctx, payload);
 });
 
 bot.catch((err) => console.error("telegraf", err));

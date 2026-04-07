@@ -146,8 +146,77 @@ async function sendTelegramMessage(token, chatId, text) {
   await axios.post(url, { chat_id: chatId, text });
 }
 
+async function sendTelegramMedia(token, chatId, attachment, caption) {
+  const dataUrl = attachment?.data_url || attachment?.thumb_url;
+  if (!dataUrl) return false;
+  const contentType = String(attachment?.file_type || "").toLowerCase();
+  const endpoint =
+    contentType.startsWith("audio/ogg") || contentType.startsWith("audio/opus")
+      ? "sendVoice"
+      : contentType.startsWith("audio/")
+      ? "sendAudio"
+      : "sendDocument";
+  const field =
+    endpoint === "sendVoice"
+      ? "voice"
+      : endpoint === "sendAudio"
+      ? "audio"
+      : "document";
+  const url = `https://api.telegram.org/bot${token}/${endpoint}`;
+  await axios.post(url, {
+    chat_id: chatId,
+    [field]: dataUrl,
+    caption: caption || undefined,
+  });
+  return true;
+}
+
+async function downloadTelegramMedia(token, media) {
+  const fileId = media?.fileId;
+  if (!fileId) {
+    const err = new Error("media.fileId is required");
+    err.status = 400;
+    throw err;
+  }
+  const infoUrl = `https://api.telegram.org/bot${token}/getFile`;
+  const { data: info } = await axios.get(infoUrl, {
+    params: { file_id: fileId },
+    timeout: 20000,
+  });
+  const filePath = info?.result?.file_path;
+  if (!filePath) {
+    const err = new Error("Telegram getFile: file_path missing");
+    err.status = 502;
+    throw err;
+  }
+  const fileUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+  const { data: binary } = await axios.get(fileUrl, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+  });
+  const buffer = Buffer.from(binary);
+  const ext = filePath.includes(".") ? filePath.split(".").pop() : "bin";
+  const baseName =
+    media?.type === "voice"
+      ? "voice"
+      : media?.type === "audio"
+      ? "audio"
+      : media?.type === "video_note"
+      ? "video_note"
+      : "media";
+  const fileName = media?.fileName || `${baseName}.${ext}`;
+  const contentType =
+    media?.mimeType ||
+    (media?.type === "voice"
+      ? "audio/ogg"
+      : media?.type === "audio"
+      ? "audio/mpeg"
+      : "application/octet-stream");
+  return { buffer, fileName, contentType };
+}
+
 async function processTelegramIncoming(body, botsMap) {
-  const { botKey, chatId, text, userId, username, name } = body || {};
+  const { botKey, chatId, text, media, userId, username, name } = body || {};
   if (!botKey || chatId == null || !text) {
     const err = new Error("Нужны поля botKey, chatId, text");
     err.status = 400;
@@ -221,7 +290,16 @@ async function processTelegramIncoming(body, botsMap) {
     throw err;
   }
 
-  await cw.createMessage(thread.conversation_id, String(text));
+  const normalizedText = String(text);
+  if (media?.fileId) {
+    const downloaded = await downloadTelegramMedia(cfg.token, media);
+    await cw.createMessageWithAttachment(thread.conversation_id, {
+      content: normalizedText,
+      ...downloaded,
+    });
+  } else {
+    await cw.createMessage(thread.conversation_id, normalizedText);
+  }
   return { conversationId: thread.conversation_id };
 }
 
@@ -395,10 +473,13 @@ app.post(
       }
 
       const content = message.content;
+      const attachments = Array.isArray(message.attachments)
+        ? message.attachments
+        : [];
       const conversationId =
         message.conversation?.id ?? message.conversation_id ?? req.body.conversation?.id;
 
-      if (!content || conversationId == null) {
+      if ((!content && attachments.length === 0) || conversationId == null) {
         return res.status(200).json({ ignored: true });
       }
 
@@ -415,14 +496,28 @@ app.post(
       }
 
       try {
-        await sendTelegramMessage(cfg.token, thread.chat_id, content);
+        let mediaSent = false;
+        for (const attachment of attachments) {
+          mediaSent =
+            (await sendTelegramMedia(
+              cfg.token,
+              thread.chat_id,
+              attachment,
+              content
+            )) || mediaSent;
+        }
+        if (!mediaSent && content) {
+          await sendTelegramMessage(cfg.token, thread.chat_id, content);
+        }
       } catch (sendErr) {
         console.warn("Telegram send failed, в очередь:", sendErr.message);
-        outboundQueue.enqueue({
-          token: cfg.token,
-          chat_id: thread.chat_id,
-          text: content,
-        });
+        if (content) {
+          outboundQueue.enqueue({
+            token: cfg.token,
+            chat_id: thread.chat_id,
+            text: content,
+          });
+        }
       }
 
       return res.json({ ok: true });
