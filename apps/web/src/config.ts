@@ -1,6 +1,10 @@
 declare global {
   interface Window {
-    __APP_CONFIG__?: { CHATWOOT_URL?: string };
+    __APP_CONFIG__?: {
+      CHATWOOT_URL?: string;
+      CHATWOOT_ACCOUNT_ID?: string;
+      CHATWOOT_NOTES_URL?: string;
+    };
   }
 }
 
@@ -10,6 +14,30 @@ export function getChatwootUrl(): string {
   const w = typeof window !== "undefined" ? window.__APP_CONFIG__?.CHATWOOT_URL : undefined;
   if (w) return w.replace(/\/$/, "");
   return "http://127.0.0.1:3000";
+}
+
+/** Номер аккаунта из URL Chatwoot (`/app/accounts/1/...`). В Docker подставляется из CHATWOOT_ACCOUNT_ID. */
+export function getChatwootAccountId(): string {
+  const fromEnv = import.meta.env.VITE_CHATWOOT_ACCOUNT_ID;
+  if (fromEnv && String(fromEnv).trim()) return String(fromEnv).trim();
+  const w =
+    typeof window !== "undefined"
+      ? window.__APP_CONFIG__?.CHATWOOT_ACCOUNT_ID
+      : undefined;
+  if (w && String(w).trim()) return String(w).trim();
+  return "1";
+}
+
+/** Необязательный URL для пункта «Заметки» (например кастомное представление в форке Chatwoot). */
+export function getChatwootNotesUrlOverride(): string | undefined {
+  const fromEnv = import.meta.env.VITE_CHATWOOT_NOTES_URL;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/$/, "");
+  const w =
+    typeof window !== "undefined"
+      ? window.__APP_CONFIG__?.CHATWOOT_NOTES_URL
+      : undefined;
+  if (w && w.trim()) return w.trim().replace(/\/$/, "");
+  return undefined;
 }
 
 /** Базовый URL моста без суффикса (прокси /api/bridge или прямой :4000) */

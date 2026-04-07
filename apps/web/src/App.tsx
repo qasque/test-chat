@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getBridgeHealthUrl, getChatwootUrl } from "./config";
 import BotSetup from "./BotSetup";
+import ChatwootDialogsNav from "./ChatwootDialogsNav";
 import "./App.css";
 
 type Health = {
@@ -83,6 +84,7 @@ export default function App() {
             Рабочее место агентов — это веб-интерфейс Chatwoot (диалоги,
             инбоксы, команды).
           </p>
+          <ChatwootDialogsNav />
           <a
             className="btn primary"
             href={chatwootUrl}
