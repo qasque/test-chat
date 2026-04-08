@@ -5,6 +5,7 @@
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0);
 }
 
 /* On mobile, nav is fixed at bottom; content fills the rest */
@@ -19,6 +20,9 @@
 @media (min-width: 960px) {
   .app-content {
     padding-bottom: 0;
+  }
+  .app-shell {
+    padding-top: 0;
   }
 }
 

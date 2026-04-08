@@ -9,9 +9,10 @@ const config: CapacitorConfig = {
     cleartext: false,
   },
   ios: {
-    contentInset: "automatic",
+    contentInset: "never",
     preferredContentMode: "mobile",
     backgroundColor: "#0f1419",
+    allowsLinkPreview: false,
   },
   android: {
     allowMixedContent: false,
@@ -25,6 +26,7 @@ const config: CapacitorConfig = {
       showSpinner: false,
     },
     StatusBar: {
+      overlaysWebView: true,
       style: "DARK",
       backgroundColor: "#0f1419",
     },
