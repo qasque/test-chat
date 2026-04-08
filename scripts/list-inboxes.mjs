@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Список инбоксов Chatwoot (нужен Platform API token в .env родителя).
- * Запуск из корня репозитория: node scripts/list-inboxes.mjs
+ * List Chatwoot inboxes (needs CHATWOOT_API_ACCESS_TOKEN in repo root .env).
+ *   node scripts/list-inboxes.mjs
  */
 import fs from "fs";
 import path from "path";
@@ -12,7 +12,7 @@ const envPath = path.join(__dirname, "..", ".env");
 
 function loadEnv() {
   if (!fs.existsSync(envPath)) {
-    console.error("Создайте .env из .env.example");
+    console.error("Create .env from .env.example");
     process.exit(1);
   }
   const raw = fs.readFileSync(envPath, "utf8");
@@ -35,7 +35,7 @@ const token = process.env.CHATWOOT_API_ACCESS_TOKEN;
 const accountId = process.env.CHATWOOT_ACCOUNT_ID || "1";
 
 if (!token) {
-  console.error("Задайте CHATWOOT_API_ACCESS_TOKEN в .env");
+  console.error("Set CHATWOOT_API_ACCESS_TOKEN in .env");
   process.exit(1);
 }
 

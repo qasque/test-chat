@@ -1,6 +1,5 @@
-# Сброс системного прокси WinHTTP (часто 127.0.0.1:12334), из-за которого Docker не тянет образы.
-# Запуск: PowerShell от пользователя, затем перезапуск Docker Desktop.
-# Требует прав: обычно достаточно без администратора.
+# Reset WinHTTP proxy (often 127.0.0.1:*) that blocks Docker pulls.
+# Run as user, then restart Docker Desktop.
 $ErrorActionPreference = "Stop"
 Write-Host "Текущие настройки WinHTTP:"
 netsh winhttp show proxy

@@ -1,9 +1,6 @@
 import fs from "fs";
 import path from "path";
 
-/**
- * Персистентная очередь исходящих в Telegram при временных сбоях API.
- */
 export function openOutboundQueue(filePath) {
   const resolved = path.resolve(filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });

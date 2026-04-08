@@ -1,10 +1,6 @@
 import axios from "axios";
 import FormData from "form-data";
 
-/**
- * Клиент Platform API Chatwoot v1.
- * @see https://www.chatwoot.com/developers/api
- */
 export function createChatwootClient({ baseUrl, apiAccessToken, accountId }) {
   const api = axios.create({
     baseURL: `${baseUrl.replace(/\/$/, "")}/api/v1`,

@@ -1,11 +1,6 @@
 /**
- * Пример: после обработки сообщения в Telegram-боте отправить его в мост.
- * Установите: npm install node-fetch (или используйте глобальный fetch в Node 18+).
- *
- * Переменные окружения:
- *   BRIDGE_URL — https://your-domain или http://127.0.0.1:4000
- *   BRIDGE_SECRET — как BRIDGE_SECRET в .env моста
- *   BOT_KEY — ключ из TELEGRAM_BOTS_JSON (например payments_bot)
+ * Example: forward a Telegram message to the bridge after your bot handles it.
+ * Env: BRIDGE_URL, BRIDGE_SECRET, BOT_KEY (matches TELEGRAM_BOTS_JSON).
  */
 
 export async function forwardToBridge({ text, chatId, userId, username, name }) {

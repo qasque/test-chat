@@ -1,5 +1,4 @@
-# Проверка доступности Chatwoot, моста и портала после docker compose up.
-# Rails может отвечать с задержкой 1–3 минуты после старта контейнеров.
+# Wait until Chatwoot, bridge, and portal respond (Rails may need 1–3 min after up).
 param(
     [int] $TimeoutSec = 180,
     [int] $IntervalSec = 5,

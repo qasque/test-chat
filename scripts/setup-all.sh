@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Полное развёртывание Chatwoot + telegram-bridge (Linux / macOS, Docker Compose v2)
+# Deploy Chatwoot + telegram-bridge (Linux/macOS, Docker Compose v2)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

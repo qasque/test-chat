@@ -1,4 +1,4 @@
-# Создание дампа PostgreSQL контейнера chatwoot (PowerShell)
+# Dump PostgreSQL from the chatwoot compose stack (PowerShell)
 param(
     [string]$OutDir = (Join-Path $PSScriptRoot "..\backups")
 )

@@ -1,13 +1,8 @@
-# Сборка образа Chatwoot (кастом) на Windows и экспорт в .tar для переноса на сервер.
-# Требуется: Docker Desktop, включённый WSL2/Linux engine.
-#
-# Запуск из корня репозитория test-chat:
+# Build custom Chatwoot image on Windows and export to .tar for the server.
+# Needs: Docker Desktop (WSL2/Linux engine).
 #   .\scripts\build-chatwoot-image.ps1
-#
-# Или с путём к клону chatwoot-custom:
-#   .\scripts\build-chatwoot-image.ps1 -ChatwootRoot "C:\Users\...\chatwoot-custom"
-#
-# После сборки: скопировать .tar на сервер и выполнить: docker load -i chatwoot-custom-*.tar
+#   .\scripts\build-chatwoot-image.ps1 -ChatwootRoot "C:\path\to\chatwoot-custom"
+# Server: docker load -i chatwoot-custom_*.tar
 
 param(
     [string]$ChatwootRoot = "",
@@ -20,7 +15,7 @@ $ErrorActionPreference = "Stop"
 
 docker info 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Docker недоступен. Запустите Docker Desktop и дождитесь статуса Running, затем повторите."
+    Write-Error "Docker is not available. Start Docker Desktop and wait until it is running."
 }
 
 if (-not $ChatwootRoot) {
@@ -40,7 +35,7 @@ if (-not $ChatwootRoot) {
 }
 
 if (-not $ChatwootRoot -or -not (Test-Path (Join-Path $ChatwootRoot "docker\Dockerfile"))) {
-    Write-Error "Не найден каталог с docker\Dockerfile. Укажите -ChatwootRoot `"путь\к\chatwoot-custom`""
+    Write-Error "No folder with docker\Dockerfile found. Pass -ChatwootRoot path\to\chatwoot-custom"
 }
 
 if (-not $OutDir) {
@@ -52,36 +47,36 @@ $fullTag = "${ImageName}:${Tag}"
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $tarFile = Join-Path $OutDir "chatwoot-custom_${stamp}.tar"
 
-Write-Host "Каталог исходников: $ChatwootRoot"
-Write-Host "Образ: $fullTag"
-Write-Host "Сборка (долго, 30–90+ мин)..."
+Write-Host "Source: $ChatwootRoot"
+Write-Host "Image: $fullTag"
+Write-Host "Building (often 30–90+ min)..."
 Write-Host ""
 
 Set-Location $ChatwootRoot
 docker build -t $fullTag -f docker/Dockerfile .
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "docker build завершился с ошибкой"
+    Write-Error "docker build failed"
 }
 
 Write-Host ""
-Write-Host "Экспорт образа в $tarFile ..."
+Write-Host "Saving image to $tarFile ..."
 docker save $fullTag -o $tarFile
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "docker save завершился с ошибкой"
+    Write-Error "docker save failed"
 }
 
 $sizeMb = [math]::Round((Get-Item $tarFile).Length / 1MB, 1)
 Write-Host ""
-Write-Host "Готово. Файл: $tarFile ($sizeMb MB)"
+Write-Host "Done: $tarFile ($sizeMb MB)"
 Write-Host ""
-Write-Host "=== На сервере (после копирования .tar) ==="
+Write-Host "=== On server (after copying .tar) ==="
 Write-Host "  docker load -i /path/to/chatwoot-custom_${stamp}.tar"
-Write-Host "В docker-compose.yml (test-chat) у base:"
+Write-Host "In docker-compose.yml base service:"
 Write-Host "  image: $fullTag"
-Write-Host "Затем:"
+Write-Host "Then:"
 Write-Host "  cd ~/test-chat && docker compose up -d --force-recreate rails sidekiq"
 Write-Host ""
-Write-Host "Копирование по SSH (пример):"
-Write-Host "  scp `"$tarFile`" root@ВАШ_СЕРВЕР:/root/"
+Write-Host "SCP example:"
+Write-Host "  scp `"$tarFile`" root@YOUR_SERVER:/root/"

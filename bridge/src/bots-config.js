@@ -26,11 +26,7 @@ function loadRuntimeFile() {
   }
 }
 
-/**
- * Env + runtime-файл.
- * - inboxId из TELEGRAM_BOTS_JSON важнее runtime (чтобы не ловить 404 из‑за старого файла на диске).
- * - token: если задан в runtime (портал), он используется; иначе из env.
- */
+/** Merge TELEGRAM_BOTS_JSON with runtime file: env inboxId wins; runtime token wins over env. */
 export function getBots() {
   const env = loadEnvBots();
   const runtime = loadRuntimeFile();

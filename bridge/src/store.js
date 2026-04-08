@@ -1,17 +1,6 @@
 import fs from "fs";
 import path from "path";
 
-/**
- * Простое персистентное хранилище соответствий без нативных модулей.
- * Формат файла:
- * {
- *   threads: { "botKey::chatId": { conversation_id, contact_id, ... } },
- *   message_links: {
- *     "cw::<chatwootMessageId>": { bot_key, chat_id, telegram_message_id, conversation_id, updated_at },
- *     "tg::<botKey>::<chatId>::<telegramMessageId>": { chatwoot_message_id, ... }
- *   }
- * }
- */
 export function openStore(filePath) {
   const resolved = path.resolve(filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });

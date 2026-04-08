@@ -1,5 +1,4 @@
-# Chatwoot production stack + telegram-bridge
-# Основано на https://github.com/chatwoot/chatwoot/blob/develop/docker-compose.production.yaml
+# Chatwoot + telegram-bridge stack (based on upstream docker-compose.production.yaml)
 
 name: chatwoot-stack
 
@@ -41,7 +40,7 @@ services:
     image: pgvector/pgvector:pg16
     restart: always
     ports:
-      # 5432 на Windows часто занят/зарезервирован — снаружи 5433
+      # Host 5433 avoids conflict with local PostgreSQL on Windows (default 5432)
       - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -78,7 +77,7 @@ services:
       - rails
     restart: always
 
-  # Демо: long polling Telegram → мост. Запуск: docker compose --profile demo up -d
+  # Demo long-poll bot: docker compose --profile demo up -d
   telegram-demo-bot:
     profiles: ["demo"]
     build:
@@ -92,7 +91,7 @@ services:
       - telegram-bridge
     restart: unless-stopped
 
-  # Веб-портал: статус моста, ссылка на Chatwoot (прокси /api/bridge → telegram-bridge)
+  # Web portal; proxies /api/bridge to telegram-bridge
   portal:
     build:
       context: ./apps/web

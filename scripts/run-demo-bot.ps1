@@ -1,4 +1,4 @@
-# Локальный запуск демо-бота (без Docker): нужен .env в корне с TELEGRAM_BOT_TOKEN и TELEGRAM_BOTS_JSON
+# Run demo bot locally (no Docker): root .env needs TELEGRAM_BOT_TOKEN and TELEGRAM_BOTS_JSON
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root

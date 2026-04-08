@@ -1,17 +1,15 @@
-# Секреты и локальные env-файлы — в репозиторий только .env.example
+# Secrets — commit only .env.example
 .env
 .env.*
 !.env.example
 *.pem
 *.ppk
 
-# Markdown не включаем в origin (локально файлы остаются)
+# Markdown excluded from remote (local copies remain)
 *.md
 
-# Сборочные артефакты
 dist-docker/
 
-# IDE / служебное
 .cursor/
 .vscode/
 .idea/

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Создание дампа PostgreSQL контейнера chatwoot (Linux/macOS/Git Bash)
+# Dump PostgreSQL from the chatwoot compose stack
 set -e
 OUT_DIR="${1:-./backups}"
 mkdir -p "$OUT_DIR"

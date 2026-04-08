@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Первый push в пустой репозиторий GitHub (Debian/Ubuntu/macOS).
-# Перед запуском: установите git, настройте git config user.name / user.email.
-# Аутентификация GitHub: PAT (https) или ssh-ключ (url вида git@github.com:.../test-chat.git).
+# First push to an empty GitHub repo. Configure git user.name / user.email first.
+# Auth: GitHub PAT (https) or SSH (git@github.com:.../repo.git).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,7 +19,7 @@ git add -A
 git status
 
 if git diff --cached --quiet; then
-  echo "Нечего коммитить (пустой индекс)."
+  echo "Nothing to commit (empty index)."
   exit 1
 fi
 
@@ -28,5 +27,5 @@ git branch -M main
 git commit -m "Initial import"
 
 echo ""
-echo "Отправка в origin (потребуется логин GitHub или SSH)..."
+echo "Pushing to origin (GitHub login or SSH required)..."
 git push -u origin main

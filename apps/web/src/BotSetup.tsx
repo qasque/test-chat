@@ -4,7 +4,7 @@ import "./BotSetup.css";
 
 const STORAGE_SECRET = "portal.bridgeSecret";
 
-/** Ответ не JSON (часто HTML 502/404 от nginx) — иначе r.json() даёт Unexpected token '<' */
+/** Parse JSON; reject HTML error pages (nginx 502/404) so we do not call r.json() on HTML. */
 async function readBridgeJson(r: Response): Promise<unknown> {
   const text = await r.text();
   const t = text.trim();

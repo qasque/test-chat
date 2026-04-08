@@ -16,7 +16,6 @@ export function getChatwootUrl(): string {
   return "http://127.0.0.1:3000";
 }
 
-/** Номер аккаунта из URL Chatwoot (`/app/accounts/1/...`). В Docker подставляется из CHATWOOT_ACCOUNT_ID. */
 export function getChatwootAccountId(): string {
   const fromEnv = import.meta.env.VITE_CHATWOOT_ACCOUNT_ID;
   if (fromEnv && String(fromEnv).trim()) return String(fromEnv).trim();
@@ -28,7 +27,7 @@ export function getChatwootAccountId(): string {
   return "1";
 }
 
-/** Необязательный URL для пункта «Заметки» (например кастомное представление в форке Chatwoot). */
+/** Optional URL for the Notes shortcut (custom Chatwoot fork). */
 export function getChatwootNotesUrlOverride(): string | undefined {
   const fromEnv = import.meta.env.VITE_CHATWOOT_NOTES_URL;
   if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/$/, "");
@@ -40,7 +39,6 @@ export function getChatwootNotesUrlOverride(): string | undefined {
   return undefined;
 }
 
-/** Базовый URL моста без суффикса (прокси /api/bridge или прямой :4000) */
 export function getBridgeBaseUrl(): string {
   const direct = import.meta.env.VITE_BRIDGE_URL;
   if (direct) return direct.replace(/\/$/, "");
@@ -50,18 +48,15 @@ export function getBridgeBaseUrl(): string {
   return "/api/bridge";
 }
 
-/** Полный путь API моста, напр. /admin/bots */
 export function getBridgeApiUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${getBridgeBaseUrl()}${p}`;
 }
 
-/** Путь к /health моста */
 export function getBridgeHealthUrl(): string {
   return getBridgeApiUrl("/health");
 }
 
-/** Базовый URL ai-bot (для проверки статуса ИИ) */
 export function getAiBotBaseUrl(): string {
   const direct = import.meta.env.VITE_AIBOT_URL;
   if (direct) return direct.replace(/\/$/, "");

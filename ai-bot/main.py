@@ -1,9 +1,4 @@
-"""
-Chatwoot <-> OpenClaw bridge.
-Receives incoming messages from Chatwoot via webhook,
-forwards them to OpenClaw AI agent, replies back via Chatwoot API.
-Hands off to a human operator when AI cannot help.
-"""
+"""Chatwoot webhook to OpenClaw; replies via API; optional handoff to human."""
 
 import os
 import logging
@@ -19,9 +14,7 @@ CHATWOOT_URL = os.environ.get("CHATWOOT_URL", "http://rails:3000")
 BOT_TOKEN = os.environ.get("CHATWOOT_BOT_TOKEN", "")
 OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://openclaw:18789").rstrip("/")
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
-# Agent target for OpenClaw OpenAI-compatible API (not a raw provider model id).
 OPENCLAW_MODEL = os.environ.get("OPENCLAW_MODEL", "openclaw/default")
-# Synthetic channel for OpenClaw ingress context (policies / prompts).
 OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot")
 
 HANDOFF_MARKER = "[HANDOFF]"
@@ -29,7 +22,6 @@ HANDOFF_MESSAGE = "Перевожу вас на оператора, ожидай
 
 
 def should_bot_handle(conversation: dict) -> bool:
-    """Bot handles pending (очередь бота) или open без назначенного оператора."""
     status = conversation.get("status")
     if status == "pending":
         return True
@@ -67,7 +59,6 @@ async def handoff_to_human(account_id: int, conversation_id: int):
 
 
 def _chat_completion_text(data: dict) -> str:
-    """Extract assistant text from OpenAI-style chat completion JSON."""
     err = data.get("error")
     if isinstance(err, dict) and err.get("message"):
         raise ValueError(err.get("message", "OpenClaw API error"))
@@ -95,11 +86,6 @@ def _chat_completion_text(data: dict) -> str:
 
 
 async def ask_openclaw(session_id: str, message: str) -> str:
-    """
-    Send a message via OpenClaw Gateway OpenAI-compatible chat completions.
-    Session isolation: header x-openclaw-session-key (see OpenClaw gateway docs).
-    Requires gateway.http.endpoints.chatCompletions.enabled in OpenClaw config.
-    """
     url = f"{OPENCLAW_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENCLAW_TOKEN}",
@@ -127,8 +113,8 @@ async def ask_openclaw(session_id: str, message: str) -> str:
         base = err_msg or (resp.text[:800] if resp.text else f"HTTP {resp.status_code}")
         if resp.status_code == 404:
             base += (
-                " — включите в OpenClaw gateway.http.endpoints.chatCompletions.enabled "
-                "(см. https://docs.openclaw.ai/gateway/openai-http-api )"
+                " — enable gateway.http.endpoints.chatCompletions in OpenClaw "
+                "(https://docs.openclaw.ai/gateway/openai-http-api)"
             )
         raise RuntimeError(base)
 
@@ -136,7 +122,6 @@ async def ask_openclaw(session_id: str, message: str) -> str:
 
 
 def _looks_like_openclaw_models_json(text: str) -> bool:
-    """True if /v1/models returned JSON (not Control UI HTML)."""
     s = (text or "").lstrip()
     if not s.startswith("{"):
         return False
@@ -166,7 +151,7 @@ async def webhook(request: Request):
         return {"status": "ignored", "reason": "empty content"}
 
     conversation = payload.get("conversation", {})
-    # В webhook Chatwoot: push_data кладёт display_id в ключ "id", не "display_id"
+    # Webhook push_data: display id is often under "id", not "display_id"
     conversation_id = conversation.get("display_id") or conversation.get("id")
     account_id = payload.get("account", {}).get("id")
 
@@ -203,7 +188,7 @@ async def webhook(request: Request):
         return {"status": "error", "reason": str(e)}
 
     if not (ai_reply or "").strip():
-        log.warning("OpenClaw пустой ответ conv=%s", conversation_id)
+        log.warning("OpenClaw empty reply conv=%s", conversation_id)
         await send_reply(
             account_id,
             conversation_id,

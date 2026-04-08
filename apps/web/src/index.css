@@ -38,7 +38,6 @@ a:hover {
   text-decoration: underline;
 }
 
-/* Hide scrollbar on mobile for cleaner look */
 .scroll-container::-webkit-scrollbar {
   width: 4px;
 }

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * Проверка обязательных переменных перед запуском стека / демо-бота.
- * Запуск из корня:
- *   node scripts/validate-env.mjs           — базовые секреты Chatwoot
- *   node scripts/validate-env.mjs --bridge  — + CHATWOOT_API_ACCESS_TOKEN (мост)
- *   node scripts/validate-env.mjs --demo    — + Telegram для профиля demo
+ * Validate required .env keys before stack or demo.
+ *   node scripts/validate-env.mjs
+ *   node scripts/validate-env.mjs --bridge   # + CHATWOOT_API_ACCESS_TOKEN
+ *   node scripts/validate-env.mjs --demo      # + Telegram demo profile
  */
 import fs from "fs";
 import path from "path";
@@ -19,7 +18,7 @@ const wantBridge = wantDemo || process.argv.includes("--bridge");
 
 function loadEnvFile() {
   if (!fs.existsSync(envPath)) {
-    console.error("Нет файла .env — скопируйте .env.example в .env");
+    console.error("Missing .env — copy .env.example to .env");
     process.exit(1);
   }
   const raw = fs.readFileSync(envPath, "utf8");
@@ -63,23 +62,23 @@ if (wantDemo) {
       const key = env.TELEGRAM_BOT_KEY || "demo_bot";
       if (!parsed[key]?.inboxId || !parsed[key]?.token) {
         console.error(
-          `В TELEGRAM_BOTS_JSON должен быть ключ "${key}" с inboxId и token.`
+          `TELEGRAM_BOTS_JSON must include key "${key}" with inboxId and token.`
         );
         process.exit(1);
       }
     } catch {
-      console.error("TELEGRAM_BOTS_JSON не является валидным JSON");
+      console.error("TELEGRAM_BOTS_JSON is not valid JSON");
       process.exit(1);
     }
   }
 }
 
 if (missing.length) {
-  console.error("Заполните в .env:", missing.join(", "));
+  console.error("Set in .env:", missing.join(", "));
   process.exit(1);
 }
 
 console.log(
-  "Проверка .env: ок",
-  wantDemo ? "(режим --demo)" : wantBridge ? "(режим --bridge)" : ""
+  ".env OK",
+  wantDemo ? "(--demo)" : wantBridge ? "(--bridge)" : ""
 );

@@ -12,7 +12,7 @@ import {
 } from "./bots-config.js";
 
 const PORT = Number(process.env.BRIDGE_PORT || 4000);
-const BRIDGE_SECRET = (process.env.BRIDGE_SECRET || "").trim(); // CRLF в .env (Windows)
+const BRIDGE_SECRET = (process.env.BRIDGE_SECRET || "").trim();
 const CHATWOOT_WEBHOOK_SECRET = process.env.CHATWOOT_WEBHOOK_SECRET || "";
 const CHATWOOT_BASE =
   process.env.CHATWOOT_INTERNAL_URL ||
@@ -29,7 +29,6 @@ const TELEGRAM_SEND_MAX_ATTEMPTS = Number(
   process.env.BRIDGE_TELEGRAM_MAX_ATTEMPTS || 12
 );
 
-/** @type {Map<string, Promise<void>>} */
 const threadCreationLocks = new Map();
 
 function requireSecret(req, res, next) {
@@ -200,10 +199,7 @@ function extractWebhookMessageId(reqBody, message) {
   return Number.isFinite(Number(id)) ? Number(id) : null;
 }
 
-/**
- * В UI Chatwoot «удаление» сообщения — это update с content_attributes.deleted=true
- * (см. MessagesController#destroy), webhook: message_updated, не message_deleted.
- */
+/** Chatwoot soft-delete sets content_attributes.deleted (often message_updated, not message_deleted). */
 function isMessageSoftDeleted(message) {
   const ca = message?.content_attributes;
   if (!ca || typeof ca !== "object") return false;
@@ -372,7 +368,6 @@ async function processTelegramIncoming(body, botsMap) {
   return { conversationId: thread.conversation_id };
 }
 
-/** Обработка очереди с последовательными await (без гонок) */
 async function drainOutboundQueueOnce() {
   const items = outboundQueue.list();
   if (!items.length) return;
@@ -519,10 +514,6 @@ app.post("/admin/test-incoming", requireAdminSecret, async (req, res) => {
   }
 });
 
-/**
- * Webhook Chatwoot: message_created (+ опционально message_deleted),
- * а также message_updated при soft-delete (content_attributes.deleted).
- */
 app.post(
   "/chatwoot/webhook",
   (req, res, next) => {
@@ -612,7 +603,6 @@ app.post(
 
       try {
         let mediaSent = false;
-        /** @type {number[]} */
         const sentTelegramMessageIds = [];
         for (const attachment of attachments) {
           const sentId = await sendTelegramMedia(

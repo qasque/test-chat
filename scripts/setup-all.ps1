@@ -1,5 +1,4 @@
-# Полное развёртывание Chatwoot + telegram-bridge (Windows PowerShell)
-# Требуется: запущенный Docker Desktop (Linux engine)
+# Deploy Chatwoot + telegram-bridge (Windows PowerShell, Docker Desktop Linux engine)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root

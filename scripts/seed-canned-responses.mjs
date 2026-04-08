@@ -1,14 +1,8 @@
 #!/usr/bin/env node
 /**
- * Создаёт (или обновляет) быстрые ответы Chatwoot по темам vpn1/vpn2/vpn3.
- *
- * Запуск из корня проекта:
+ * Upsert canned responses (vpn1/vpn2/vpn3 templates).
  *   node scripts/seed-canned-responses.mjs
- *
- * Требует в .env:
- *   CHATWOOT_API_ACCESS_TOKEN
- *   CHATWOOT_ACCOUNT_ID
- *   CHATWOOT_PUBLIC_URL (или FRONTEND_URL)
+ * Needs: CHATWOOT_API_ACCESS_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_PUBLIC_URL or FRONTEND_URL
  */
 import fs from "fs";
 import path from "path";
@@ -19,7 +13,7 @@ const envPath = path.join(__dirname, "..", ".env");
 
 function loadEnv() {
   if (!fs.existsSync(envPath)) {
-    console.error("Создайте .env из .env.example");
+    console.error("Create .env from .env.example");
     process.exit(1);
   }
   const raw = fs.readFileSync(envPath, "utf8");
@@ -42,14 +36,13 @@ const token = process.env.CHATWOOT_API_ACCESS_TOKEN;
 const accountId = process.env.CHATWOOT_ACCOUNT_ID || "1";
 
 if (!token) {
-  console.error("Нужен CHATWOOT_API_ACCESS_TOKEN в .env");
+  console.error("Set CHATWOOT_API_ACCESS_TOKEN in .env");
   process.exit(1);
 }
 
 const apiBase = `${base.replace(/\/$/, "")}/api/v1/accounts/${accountId}`;
 
 const templates = [
-  // vpn1
   {
     short_code: "vpn1_greeting",
     content:
@@ -65,7 +58,6 @@ const templates = [
     content:
       "VPN1: пришлите, пожалуйста:\n- скрин ошибки,\n- модель устройства и ОС,\n- время последней неудачной попытки,\n- страну и выбранный сервер.",
   },
-  // vpn2
   {
     short_code: "vpn2_greeting",
     content:
@@ -81,7 +73,6 @@ const templates = [
     content:
       "VPN2: для проверки подписки укажите email/ID аккаунта и дату оплаты. Проверим статус и сразу вернёмся с ответом.",
   },
-  // vpn3
   {
     short_code: "vpn3_greeting",
     content:
@@ -116,7 +107,6 @@ function pickShortCode(item) {
 }
 
 function buildBody(tpl) {
-  // Для разных версий Chatwoot набор полей немного отличается.
   return {
     short_code: tpl.short_code,
     content: tpl.content,

@@ -1,5 +1,4 @@
-# Генерация секретов в .env для демо (только плейсхолдеры из .env.example).
-# Не перезаписывает строки, уже изменённые вручную.
+# Fill .env demo secrets where values still match .env.example placeholders; skips manual edits.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $Root ".env"
