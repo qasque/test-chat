@@ -5,7 +5,7 @@ name: chatwoot-stack
 
 services:
   base: &base
-    image: chatwoot/chatwoot:latest
+    image: ghcr.io/qasque/chatwoot-custom:develop
     env_file: .env
     volumes:
       - storage_data:/app/storage
@@ -106,8 +106,37 @@ services:
       - telegram-bridge
     restart: always
 
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18789:18789"
+    volumes:
+      - openclaw_data:/home/node/.openclaw
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+
+  ai-bot:
+    build:
+      context: ./ai-bot
+      dockerfile: Dockerfile
+    environment:
+      CHATWOOT_URL: http://rails:3000
+      CHATWOOT_BOT_TOKEN: ${CHATWOOT_BOT_TOKEN:-}
+      OPENCLAW_URL: http://openclaw:18789
+      OPENCLAW_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_MODEL: ${OPENCLAW_MODEL:-openclaw/default}
+    ports:
+      - "127.0.0.1:5005:5005"
+    depends_on:
+      - rails
+      - openclaw
+    restart: always
+
 volumes:
   storage_data:
   postgres_data:
   redis_data:
   bridge_data:
+  openclaw_data:
