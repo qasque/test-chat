@@ -116,12 +116,6 @@ export function openStore(filePath) {
       if (!Number.isFinite(id)) return null;
       return messageLinks[`cw::${id}`] || null;
     },
-    getByTelegramMessageId(botKey, chatId, telegramMessageId) {
-      const { messageLinks } = load();
-      const id = Number(telegramMessageId);
-      if (!Number.isFinite(id)) return null;
-      return messageLinks[`tg::${botKey}::${String(chatId)}::${id}`] || null;
-    },
     deleteByChatwootMessageId(chatwootMessageId) {
       const payload = load();
       const messageLinks = payload.messageLinks;

@@ -193,16 +193,3 @@ code {
   width: 100%;
 }
 
-/* Status tab layout */
-.status-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/* More tab layout */
-.more-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}

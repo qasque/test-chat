@@ -8,6 +8,9 @@
 # Markdown не включаем в origin (локально файлы остаются)
 *.md
 
+# Сборочные артефакты
+dist-docker/
+
 # IDE / служебное
 .cursor/
 .vscode/

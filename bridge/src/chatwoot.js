@@ -125,19 +125,11 @@ export function createChatwootClient({ baseUrl, apiAccessToken, accountId }) {
     return data;
   }
 
-  async function deleteMessage(conversationId, messageId) {
-    const { data } = await api.delete(
-      `${accountPath}/conversations/${conversationId}/messages/${messageId}`
-    );
-    return data;
-  }
-
   return {
     getOrCreateContact,
     createConversation,
     listContactConversations,
     createMessage,
     createMessageWithAttachment,
-    deleteMessage,
   };
 }
