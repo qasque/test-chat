@@ -1,10 +1,11 @@
 :root {
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #e8eaed;
   background: linear-gradient(160deg, #0f1419 0%, #1a2332 50%, #0d1117 100%);
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 * {
@@ -14,6 +15,14 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 a {
@@ -22,4 +31,13 @@ a {
 }
 a:hover {
   text-decoration: underline;
+}
+
+/* Hide scrollbar on mobile for cleaner look */
+.scroll-container::-webkit-scrollbar {
+  width: 4px;
+}
+.scroll-container::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 2px;
 }

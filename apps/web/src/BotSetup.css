@@ -11,13 +11,18 @@
 
 .bot-setup input {
   width: 100%;
-  max-width: 420px;
-  padding: 0.5rem 0.65rem;
+  padding: 0.55rem 0.65rem;
   border-radius: 8px;
   border: 1px solid #30363d;
   background: #0d1117;
   color: #e6edf3;
   font-size: 0.9rem;
+  -webkit-appearance: none;
+}
+
+.bot-setup input:focus {
+  outline: none;
+  border-color: #58a6ff;
 }
 
 .bot-setup .btn-row {
@@ -25,6 +30,12 @@
   flex-wrap: wrap;
   gap: 0.6rem;
   margin: 1rem 0;
+}
+
+.bot-setup .btn-row .btn {
+  flex: 1;
+  min-width: 140px;
+  text-align: center;
 }
 
 .bot-setup .success {

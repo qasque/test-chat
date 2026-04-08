@@ -20,6 +20,8 @@ bridge/node_modules/
 telegram-demo-bot/node_modules/
 apps/web/node_modules/
 apps/web/dist/
+apps/web/android/
+apps/web/ios/
 apps/desktop/node_modules/
 apps/desktop/dist/
 apps/desktop/release/

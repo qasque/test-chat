@@ -12,6 +12,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/bridge/, ""),
       },
+      "/api/ai-bot": {
+        target: "http://127.0.0.1:5005",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/ai-bot/, ""),
+      },
     },
   },
 });

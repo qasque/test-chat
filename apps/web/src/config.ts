@@ -60,3 +60,17 @@ export function getBridgeApiUrl(path: string): string {
 export function getBridgeHealthUrl(): string {
   return getBridgeApiUrl("/health");
 }
+
+/** Базовый URL ai-bot (для проверки статуса ИИ) */
+export function getAiBotBaseUrl(): string {
+  const direct = import.meta.env.VITE_AIBOT_URL;
+  if (direct) return direct.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location?.protocol === "file:") {
+    return "http://127.0.0.1:5005";
+  }
+  return "/api/ai-bot";
+}
+
+export function getAiBotHealthUrl(): string {
+  return `${getAiBotBaseUrl()}/health`;
+}

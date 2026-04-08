@@ -1,0 +1,13 @@
+.cw-embed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cw-embed__frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #0d1117;
+}
