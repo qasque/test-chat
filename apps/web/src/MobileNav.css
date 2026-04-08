@@ -3,29 +3,43 @@
   bottom: 0;
   left: 0;
   right: 0;
-  display: flex;
-  background: #161b22;
-  border-top: 1px solid #30363d;
   z-index: 1000;
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  display: flex;
+  align-items: stretch;
+  min-height: var(--portal-nav-bottom);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  background: rgba(22, 27, 34, 0.94);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid #30363d;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
 }
 
 .mobile-nav__tab {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 8px 4px 6px;
+  gap: 3px;
+  min-height: var(--portal-nav-row);
+  padding: 6px 2px 8px;
   border: none;
   background: transparent;
   color: #8b949e;
   font: inherit;
-  font-size: 0.7rem;
+  font-size: clamp(0.625rem, 2.8vw, 0.7rem);
+  line-height: 1.15;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color 0.15s ease, background 0.15s ease;
   -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav__tab:active {
+  background: rgba(88, 166, 255, 0.08);
 }
 
 .mobile-nav__tab:hover,
@@ -33,34 +47,56 @@
   color: #58a6ff;
 }
 
+.mobile-nav__tab.active {
+  font-weight: 600;
+}
+
 .mobile-nav__icon {
-  font-size: 1.25rem;
+  font-size: clamp(1.125rem, 4.5vw, 1.35rem);
   line-height: 1;
 }
 
 .mobile-nav__label {
   font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 2px;
 }
 
 @media (min-width: 960px) {
   .mobile-nav {
     position: static;
+    min-height: unset;
+    padding-bottom: 0;
+    padding-left: 0;
+    padding-right: 0;
     max-width: 960px;
     margin: 0 auto;
     border-top: none;
     border-bottom: 1px solid #30363d;
     border-radius: 12px 12px 0 0;
     background: rgba(22, 27, 34, 0.85);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
   }
 
   .mobile-nav__tab {
     flex-direction: row;
-    gap: 6px;
+    gap: 8px;
     padding: 12px 16px;
+    min-height: unset;
     font-size: 0.88rem;
   }
 
   .mobile-nav__icon {
     font-size: 1.1rem;
+  }
+
+  .mobile-nav__label {
+    white-space: normal;
+    text-overflow: unset;
   }
 }

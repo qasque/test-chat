@@ -11,13 +11,16 @@
 
 .bot-setup input {
   width: 100%;
-  padding: 0.55rem 0.65rem;
-  border-radius: 8px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
   border: 1px solid #30363d;
   background: #0d1117;
   color: #e6edf3;
-  font-size: 0.9rem;
+  font-size: 1rem;
   -webkit-appearance: none;
+  appearance: none;
 }
 
 .bot-setup input:focus {
@@ -33,9 +36,19 @@
 }
 
 .bot-setup .btn-row .btn {
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 auto;
+  min-width: min(100%, 8.75rem);
   text-align: center;
+}
+
+@media (max-width: 380px) {
+  .bot-setup .btn-row {
+    flex-direction: column;
+  }
+  .bot-setup .btn-row .btn {
+    min-width: 100%;
+    width: 100%;
+  }
 }
 
 .bot-setup .success {
