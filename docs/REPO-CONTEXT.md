@@ -11,7 +11,7 @@
 | **ai-bot** | `ai-bot/` — вебхук Chatwoot → OpenClaw (`/v1/chat/completions`), ответ в диалог через Chatwoot API. Порт **5005**. |
 | **Веб-портал** | `apps/web/` — сервис `portal` в compose, прокси к bridge. |
 | **Desktop** | `apps/desktop/` — отдельное приложение. |
-| **Мобильные приложения** | **`apps/mobile/`** — один Flutter-проект под **iOS и Android** (каталоги `ios/`, `android/`). В репозитории также настроены remotes **`ios-chat`** и **`android-chat`** на отдельные GitHub-репо, если ведёте нативные/параллельные линии. |
+| **Мобильные приложения** | **`apps/mobile/`** — Flutter **iOS + Android**: вход по **email и паролю Chatwoot** через портал `…/api/bridge/mobile/v1/auth/login` (нужен **`BRIDGE_MOBILE_JWT_SECRET`** на мосту). Remotes **`ios-chat`** / **`android-chat`** — при необходимости отдельные репо. |
 | **Демо-бот** | `telegram-demo-bot/` — профиль `demo` в compose. |
 | **Примеры** | `examples/`, `deploy/`. |
 
