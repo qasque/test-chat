@@ -126,6 +126,9 @@ services:
       OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw:18789}
       OPENCLAW_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_MODEL: ${OPENCLAW_MODEL:-openclaw/default}
+      # Многострочный промпт: в .env удобнее файл + volume, либо одна строка с \\n
+      AI_BOT_SYSTEM_PROMPT: ${AI_BOT_SYSTEM_PROMPT:-}
+      AI_BOT_SYSTEM_PROMPT_FILE: ${AI_BOT_SYSTEM_PROMPT_FILE:-}
     ports:
       - "127.0.0.1:5005:5005"
     depends_on:
