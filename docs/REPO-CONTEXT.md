@@ -11,14 +11,14 @@
 | **ai-bot** | `ai-bot/` — вебхук Chatwoot → OpenClaw (`/v1/chat/completions`), ответ в диалог через Chatwoot API. Порт **5005**. |
 | **Веб-портал** | `apps/web/` — сервис `portal` в compose, прокси к bridge. |
 | **Desktop** | `apps/desktop/` — отдельное приложение. |
-| **Мобильные приложения** | **`apps/mobile/`** — Flutter **iOS + Android**: вход по **email и паролю Chatwoot** через портал `…/api/bridge/mobile/v1/auth/login` (нужен **`BRIDGE_MOBILE_JWT_SECRET`** на мосту). Remotes **`ios-chat`** / **`android-chat`** — при необходимости отдельные репо. |
+| **Мобильные приложения** | Исходники **не** в этом репо. Рабочие Flutter-приложения: **`https://github.com/qasque/android-chat`** и **`https://github.com/qasque/ios-chat`** (ветка `main` совпадает по коду). Вход оператора: **email + пароль Chatwoot** через мост `POST …/mobile/v1/auth/login` (в приложении — экран «Оператор» / `AgentWorkspaceController.loginWithBridge`). На сервере нужен **`BRIDGE_MOBILE_JWT_SECRET`**. |
 | **Демо-бот** | `telegram-demo-bot/` — профиль `demo` в compose. |
 | **Примеры** | `examples/`, `deploy/`. |
 
 ## Git remotes
 
 - **`origin`** → `https://github.com/qasque/test-chat.git` — основной монорепозиторий (стек + приложения).
-- **`android-chat`** / **`ios-chat`** → отдельные репозитории под мобильные линии (см. `git remote -v`).
+- **`android-chat`** / **`ios-chat`** → **основные** репозитории мобильного клиента (Flutter); в `test-chat` только remotes для `git fetch`.
 
 ## Важные пути и данные
 
@@ -46,9 +46,9 @@ git -c core.hooksPath=scripts/empty_git_hooks commit ...
 
 Правило в `.gitignore`: по умолчанию игнорируются все **`*.md`**, кроме явных исключений. Сейчас в индекс допускается **`docs/REPO-CONTEXT.md`** — при добавлении других `.md` в репозиторий добавьте для них строки `!...` в `.gitignore`.
 
-## Локальный `apps/mobile`
+## Разработка мобильного клиента
 
-Если в корне `apps/mobile` нет `pubspec.yaml`, дерево может быть неполной копией или переносом из другого места; перед коммитом мобильного приложения проверьте стандартный Flutter-layout и не коммитьте `build/`, `.dart_tool/` (добавьте при необходимости в `.gitignore` под `apps/mobile/`).
+Клонировать **`android-chat`** или **`ios-chat`**, собирать там (`flutter run` / Xcode / Android Studio). Прод-сборка: задать **`BRIDGE_BASE_URL`** (часто `https://…/api/bridge` через портал) и при необходимости `--dart-define` из `lib/src/config/app_config.dart`.
 
 ---
 
