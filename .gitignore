@@ -27,3 +27,7 @@ apps/desktop/node_modules/
 apps/desktop/dist/
 apps/desktop/release/
 *.log
+
+# Local copies of other repos (do not commit)
+_android_chat_tmp/
+_ios_chat_tmp/

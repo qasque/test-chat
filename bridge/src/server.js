@@ -25,7 +25,8 @@ const API_TOKEN = process.env.CHATWOOT_API_ACCESS_TOKEN || "";
 const DB_PATH = process.env.BRIDGE_DB_PATH || "/data/telegram-threads.json";
 const OUTBOUND_QUEUE_PATH =
   process.env.BRIDGE_OUTBOUND_QUEUE_PATH || "/data/telegram-outbound-queue.json";
-const RETRY_INTERVAL_MS = Number(process.env.BRIDGE_TELEGRAM_RETRY_MS || 15000);
+/** Повтор отправки в Telegram при ошибке; между тиками setInterval. */
+const RETRY_INTERVAL_MS = Number(process.env.BRIDGE_TELEGRAM_RETRY_MS || 5000);
 const TELEGRAM_SEND_MAX_ATTEMPTS = Number(
   process.env.BRIDGE_TELEGRAM_MAX_ATTEMPTS || 12
 );
@@ -407,8 +408,16 @@ async function drainOutboundQueueOnce() {
   outboundQueue.replaceAll(next);
 }
 
+/** Одна цепочка промисов — без параллельных drain (иначе гонка по файлу очереди). */
+let drainOutboundTail = Promise.resolve();
+function scheduleDrainOutboundQueue() {
+  drainOutboundTail = drainOutboundTail
+    .then(() => drainOutboundQueueOnce())
+    .catch((e) => console.error(e));
+}
+
 setInterval(() => {
-  drainOutboundQueueOnce().catch((e) => console.error(e));
+  scheduleDrainOutboundQueue();
 }, RETRY_INTERVAL_MS);
 
 app.post("/telegram/incoming", requireSecret, async (req, res) => {
@@ -645,6 +654,8 @@ app.post(
             chat_id: thread.chat_id,
             text: content,
           });
+          // Сразу повторить, не ждать следующий тик setInterval (раньше было до 15 с).
+          scheduleDrainOutboundQueue();
         }
       }
 
