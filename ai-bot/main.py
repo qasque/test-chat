@@ -19,17 +19,28 @@ OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot"
 
 HANDOFF_MARKER = "[HANDOFF]"
 HANDOFF_MESSAGE = "Перевожу вас на оператора, ожидайте..."
+# После handoff выставляем в диалоге, чтобы бот не отвечал поверх оператора.
+AI_HANDOFF_ATTR = "ai_handoff"
+
+
+def _conversation_handed_off(conversation: dict) -> bool:
+    custom = conversation.get("custom_attributes") or {}
+    val = custom.get(AI_HANDOFF_ATTR)
+    if val is True:
+        return True
+    if isinstance(val, str) and val.strip().lower() in ("true", "1", "yes"):
+        return True
+    return False
 
 
 def should_bot_handle(conversation: dict) -> bool:
+    """Пока диалог открыт и бот сам не сделал handoff — отвечаем, даже если есть assignee."""
     status = conversation.get("status")
-    if status == "pending":
-        return True
-    if status != "open":
+    if status not in ("pending", "open"):
         return False
-    meta = conversation.get("meta") or {}
-    assignee = meta.get("assignee")
-    return assignee is None
+    if _conversation_handed_off(conversation):
+        return False
+    return True
 
 
 async def chatwoot_api(method: str, path: str, json_data: dict = None):
@@ -38,6 +49,8 @@ async def chatwoot_api(method: str, path: str, json_data: dict = None):
     async with httpx.AsyncClient(timeout=30) as client:
         if method == "POST":
             resp = await client.post(url, json=json_data, headers=headers)
+        elif method == "PATCH":
+            resp = await client.patch(url, json=json_data, headers=headers)
         else:
             resp = await client.get(url, headers=headers)
         resp.raise_for_status()
@@ -56,6 +69,12 @@ async def send_reply(account_id: int, conversation_id: int, message: str):
 async def handoff_to_human(account_id: int, conversation_id: int):
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status"
     await chatwoot_api("POST", path, {"status": "open"})
+    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+    await chatwoot_api(
+        "PATCH",
+        conv_path,
+        {"custom_attributes": {AI_HANDOFF_ATTR: True}},
+    )
 
 
 def _chat_completion_text(data: dict) -> str:
@@ -161,13 +180,13 @@ async def webhook(request: Request):
 
     if not should_bot_handle(conversation):
         log.info(
-            "ignored: status=%s assignee=%s",
+            "ignored: status=%s ai_handoff=%s",
             conversation.get("status"),
-            (conversation.get("meta") or {}).get("assignee"),
+            (conversation.get("custom_attributes") or {}).get(AI_HANDOFF_ATTR),
         )
         return {
             "status": "ignored",
-            "reason": "human_assigned_or_bad_status",
+            "reason": "handed_off_or_bad_status",
         }
 
     log.info(
