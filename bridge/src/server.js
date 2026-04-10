@@ -3,6 +3,7 @@ import express from "express";
 import crypto from "crypto";
 import axios from "axios";
 import { createChatwootClient } from "./chatwoot.js";
+import { mountMobileGateway } from "./mobile-gateway.js";
 import { openStore } from "./store.js";
 import { openOutboundQueue } from "./outbound-queue.js";
 import {
@@ -120,6 +121,8 @@ app.use(
     },
   })
 );
+
+mountMobileGateway(app, CHATWOOT_BASE);
 
 function allowHealthCors(req, res, next) {
   const origin = process.env.BRIDGE_CORS_ORIGIN || "*";
