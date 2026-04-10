@@ -1,0 +1,55 @@
+# Контекст репозитория (для продолжения работы в новом чате)
+
+Краткая записка о том, что это за монорепозиторий и где что лежит. Файл **намеренно в git** (см. исключение в `.gitignore`), чтобы ассистент или человек могли быстро войти в контекст после сброса памяти чата.
+
+## Что внутри
+
+| Часть | Назначение |
+|--------|------------|
+| **Chatwoot (форк)** | В проде не исходники Ruby в этом репо — образ **`ghcr.io/qasque/chatwoot-custom:develop`** в `docker-compose.yml` (`rails`, `sidekiq`). Локальный стек: Postgres, Redis, Rails, Sidekiq. |
+| **telegram-bridge** | `bridge/` — вход из Telegram в Chatwoot, вебхук Chatwoot → обратно в Telegram, мобильный gateway (`mobile-gateway`). Порт по умолчанию **4000**. |
+| **ai-bot** | `ai-bot/` — вебхук Chatwoot → OpenClaw (`/v1/chat/completions`), ответ в диалог через Chatwoot API. Порт **5005**. |
+| **Веб-портал** | `apps/web/` — сервис `portal` в compose, прокси к bridge. |
+| **Desktop** | `apps/desktop/` — отдельное приложение. |
+| **Мобильные приложения** | **`apps/mobile/`** — один Flutter-проект под **iOS и Android** (каталоги `ios/`, `android/`). В репозитории также настроены remotes **`ios-chat`** и **`android-chat`** на отдельные GitHub-репо, если ведёте нативные/параллельные линии. |
+| **Демо-бот** | `telegram-demo-bot/` — профиль `demo` в compose. |
+| **Примеры** | `examples/`, `deploy/`. |
+
+## Git remotes
+
+- **`origin`** → `https://github.com/qasque/test-chat.git` — основной монорепозиторий (стек + приложения).
+- **`android-chat`** / **`ios-chat`** → отдельные репозитории под мобильные линии (см. `git remote -v`).
+
+## Важные пути и данные
+
+- Секреты только в **`.env`** (в git не коммитится); шаблон — **`.env.example`**.
+- Состояние моста: volume **`bridge_data`** (маппинги диалогов, очередь исходящих в Telegram).
+- В **`.gitignore`**: `_android_chat_tmp/`, `_ios_chat_tmp/` — локальные копии других репо, не коммитить.
+
+## Типичный поток сообщений
+
+1. Пользователь пишет в **Telegram** → bridge создаёт/обновляет контакт и **incoming** в Chatwoot.  
+2. **Chatwoot** шлёт вебхук в **ai-bot** (если настроен URL вебхука на `ai-bot`).  
+3. **ai-bot** дергает **OpenClaw** и постит **outgoing** в тот же диалог.  
+4. **Chatwoot** шлёт вебхук **`message_created`** на **telegram-bridge** `/chatwoot/webhook` → bridge шлёт текст в Telegram.  
+   Задержки/очередь исходящих — логика в `bridge/src/server.js` (очередь на диске, повторы).
+
+## Коммиты без trailer IDE
+
+Глобальные хуки могут дописывать строки вроде `Made-with: Cursor`. В репозитории есть пустая папка хуков и подсказка в `scripts/git-msg-strip-cursor-trailer.py`:
+
+```bash
+git -c core.hooksPath=scripts/empty_git_hooks commit ...
+```
+
+## Markdown в git
+
+Правило в `.gitignore`: по умолчанию игнорируются все **`*.md`**, кроме явных исключений. Сейчас в индекс допускается **`docs/REPO-CONTEXT.md`** — при добавлении других `.md` в репозиторий добавьте для них строки `!...` в `.gitignore`.
+
+## Локальный `apps/mobile`
+
+Если в корне `apps/mobile` нет `pubspec.yaml`, дерево может быть неполной копией или переносом из другого места; перед коммитом мобильного приложения проверьте стандартный Flutter-layout и не коммитьте `build/`, `.dart_tool/` (добавьте при необходимости в `.gitignore` под `apps/mobile/`).
+
+---
+
+*Обновляйте этот файл при смене архитектуры, remotes или имён сервисов в compose.*

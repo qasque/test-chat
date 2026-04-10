@@ -7,6 +7,7 @@
 
 # Markdown excluded from remote (local copies remain)
 *.md
+!docs/REPO-CONTEXT.md
 
 dist-docker/
 
