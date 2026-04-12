@@ -118,8 +118,8 @@ services:
 
   ai-bot:
     build:
-      context: ./ai-bot
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ai-bot/Dockerfile
     volumes:
       - ./config/ai-system-prompt.txt:/app/config/ai-system-prompt.txt:ro
     environment:

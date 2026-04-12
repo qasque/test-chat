@@ -1,0 +1,22 @@
+# Сборка ai-bot с context: . (см. docker-compose.yml) — не отправлять в демон лишнее
+.git
+apps
+bridge
+telegram-demo-bot
+examples
+docs
+**/node_modules
+**/dist
+**/build
+**/.dart_tool
+**/android/.gradle
+**/android/build
+**/ios/Pods
+.env
+.env.*
+*.log
+postgres_data
+redis_data
+bridge_data
+storage_data
+openclaw_data
