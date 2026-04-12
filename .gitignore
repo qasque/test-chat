@@ -40,3 +40,6 @@ apps/mobile/
 scripts/clean-flutter-artifacts.ps1
 scripts/git-stage-android-chat.ps1
 scripts/git-stage-ios-chat.ps1
+
+# Промпт с данными продукта (при необходимости копируйте на сервер вручную)
+config/ai-system-prompt-kosmos-premium.txt

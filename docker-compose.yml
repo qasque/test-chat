@@ -120,15 +120,17 @@ services:
     build:
       context: ./ai-bot
       dockerfile: Dockerfile
+    volumes:
+      - ./config/ai-system-prompt.txt:/app/config/ai-system-prompt.txt:ro
     environment:
       CHATWOOT_URL: http://rails:3000
       CHATWOOT_BOT_TOKEN: ${CHATWOOT_BOT_TOKEN:-}
       OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw:18789}
       OPENCLAW_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_MODEL: ${OPENCLAW_MODEL:-openclaw/default}
-      # Многострочный промпт: в .env удобнее файл + volume, либо одна строка с \\n
+      # Промпт: правьте ./config/ai-system-prompt.txt на хосте (смонтирован ниже). Пустой AI_BOT_SYSTEM_PROMPT в .env.
       AI_BOT_SYSTEM_PROMPT: ${AI_BOT_SYSTEM_PROMPT:-}
-      AI_BOT_SYSTEM_PROMPT_FILE: ${AI_BOT_SYSTEM_PROMPT_FILE:-}
+      AI_BOT_SYSTEM_PROMPT_FILE: /app/config/ai-system-prompt.txt
     ports:
       - "127.0.0.1:5005:5005"
     depends_on:
