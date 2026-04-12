@@ -32,3 +32,6 @@ apps/desktop/release/
 # Local copies of other repos (do not commit)
 _android_chat_tmp/
 _ios_chat_tmp/
+
+# Flutter mobile app — отдельный проект, не коммитить в этот репозиторий
+apps/mobile/
