@@ -283,7 +283,7 @@ async def health():
     except Exception:
         pass
 
-    src, prompt_text = _resolve_system_prompt()
+    prompt_text, src = _resolve_system_prompt()
     return {
         "status": "ok",
         "openclaw_url": OPENCLAW_URL,
