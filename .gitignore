@@ -35,3 +35,8 @@ _ios_chat_tmp/
 
 # Flutter mobile app — отдельный проект, не коммитить в этот репозиторий
 apps/mobile/
+
+# Локальные скрипты монорепо (Flutter), на сервер не нужны
+scripts/clean-flutter-artifacts.ps1
+scripts/git-stage-android-chat.ps1
+scripts/git-stage-ios-chat.ps1
