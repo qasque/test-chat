@@ -30,6 +30,8 @@ HANDOFF_MARKER = "[HANDOFF]"
 HANDOFF_MESSAGE = "Перевожу вас на оператора, ожидайте..."
 # После handoff выставляем в диалоге, чтобы бот не отвечал поверх оператора.
 AI_HANDOFF_ATTR = "ai_handoff"
+# Стандартный путь в docker-compose (volume): ./config/ai-system-prompt.txt → контейнер
+DEFAULT_PROMPT_FILE = "/app/config/ai-system-prompt.txt"
 
 
 def _conversation_handed_off(conversation: dict) -> bool:
@@ -44,15 +46,24 @@ def _conversation_handed_off(conversation: dict) -> bool:
 
 def _resolve_system_prompt() -> tuple[str, str]:
     """Возвращает (текст, источник: file|env|default)."""
-    path = (os.environ.get("AI_BOT_SYSTEM_PROMPT_FILE") or "").strip()
-    if path:
+    env_path = (os.environ.get("AI_BOT_SYSTEM_PROMPT_FILE") or "").strip()
+    paths = []
+    if env_path:
+        paths.append(env_path)
+    if DEFAULT_PROMPT_FILE not in paths:
+        paths.append(DEFAULT_PROMPT_FILE)
+
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
         try:
             with open(path, encoding="utf-8") as f:
                 text = f.read().strip()
             if text:
                 return text, "file"
         except OSError as e:
-            log.warning("AI_BOT_SYSTEM_PROMPT_FILE unreadable (%s): %s", path, e)
+            log.warning("system prompt file unreadable (%s): %s", path, e)
+
     raw = (os.environ.get("AI_BOT_SYSTEM_PROMPT") or "").strip()
     if raw:
         return raw.replace("\\n", "\n"), "env"
