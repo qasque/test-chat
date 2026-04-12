@@ -59,9 +59,6 @@ def _resolve_system_prompt() -> tuple[str, str]:
     return DEFAULT_AI_SYSTEM_PROMPT.strip(), "default"
 
 
-SYSTEM_PROMPT, SYSTEM_PROMPT_SOURCE = _resolve_system_prompt()
-
-
 def should_bot_handle(conversation: dict) -> bool:
     """Пока диалог открыт и бот сам не сделал handoff — отвечаем, даже если есть assignee."""
     status = conversation.get("status")
@@ -134,6 +131,7 @@ def _chat_completion_text(data: dict) -> str:
 
 
 async def ask_openclaw(session_id: str, message: str) -> str:
+    system_prompt, _ = _resolve_system_prompt()
     url = f"{OPENCLAW_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENCLAW_TOKEN}",
@@ -142,8 +140,8 @@ async def ask_openclaw(session_id: str, message: str) -> str:
         "x-openclaw-message-channel": OPENCLAW_MESSAGE_CHANNEL,
     }
     messages = []
-    if SYSTEM_PROMPT:
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": message})
     payload = {
         "model": OPENCLAW_MODEL,
@@ -285,6 +283,7 @@ async def health():
     except Exception:
         pass
 
+    src, prompt_text = _resolve_system_prompt()
     return {
         "status": "ok",
         "openclaw_url": OPENCLAW_URL,
@@ -292,6 +291,6 @@ async def health():
         "openclaw_chat_api": openclaw_chat_api,
         "chatwoot_url": CHATWOOT_URL,
         "bot_token_set": bool(BOT_TOKEN),
-        "system_prompt_source": SYSTEM_PROMPT_SOURCE,
-        "system_prompt_chars": len(SYSTEM_PROMPT),
+        "system_prompt_source": src,
+        "system_prompt_chars": len(prompt_text),
     }
