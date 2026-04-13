@@ -1,5 +1,5 @@
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
-index 0590b1a58..22a5443ff 100644
+index 0590b1a58..c768e2d7e 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
 @@ -4,3 +4,19 @@ export const isConversationAssignedToMe = (message, currentUserId) =>
@@ -9,7 +9,7 @@ index 0590b1a58..22a5443ff 100644
 +
 +export const AI_HANDOFF_CUSTOM_ATTR = 'ai_handoff';
 +
-+/** Синхронно с ai-bot: PATCH custom_attributes.ai_handoff при переводе на оператора. */
++/** True when ai-bot set custom_attributes.ai_handoff (human takeover). */
 +export const isAiHandoffToOperatorActive = conversation => {
 +  if (!conversation) return false;
 +  const custom = conversation.custom_attributes;
@@ -59,17 +59,17 @@ index 30deca003..07a744577 100644
  
    isMessageFromPendingConversation = (message = {}) => {
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
-index 9e79bb3a2..a91a167b9 100644
+index 9e79bb3a2..b19eada09 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
-@@ -9,6 +9,7 @@ import {
+@@ -6,6 +6,7 @@ import { EVENT_TYPES } from 'dashboard/routes/dashboard/settings/profile/constan
+ import GlobalStore from 'dashboard/store';
+ import AudioNotificationStore from './AudioNotificationStore';
+ import {
++  isAiHandoffToOperatorActive,
    isConversationAssignedToMe,
    isConversationUnassigned,
    isMessageFromCurrentUser,
-+  isAiHandoffToOperatorActive,
- } from './AudioMessageHelper';
- import WindowVisibilityHelper from './WindowVisibilityHelper';
- import { useAlert } from 'dashboard/composables';
 @@ -97,6 +98,19 @@ export class DashboardAudioNotificationHelper {
      this.playAudioEvery30Seconds();
    };
