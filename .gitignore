@@ -17,6 +17,8 @@ dist-docker/
 .DS_Store
 *.tmp
 .ssh-key-check.tmp
+__pycache__/
+*.py[cod]
 
 bridge/node_modules/
 telegram-demo-bot/node_modules/
