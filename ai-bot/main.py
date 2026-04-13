@@ -428,6 +428,12 @@ async def transcribe_audio(
         except Exception as e:
             errs.append(f"openai: {e}")
             log.warning("OpenAI STT failed, trying OpenClaw: %s", e)
+    else:
+        log.warning(
+            "Whisper (OpenAI) пропущен: нет OPENAI_API_KEY в контейнере ai-bot. "
+            "Выполните на сервере: git pull && docker compose up -d --build ai-bot. "
+            "Ключ DeepSeek не подходит для https://api.openai.com/v1/audio/transcriptions — нужен отдельный ключ OpenAI."
+        )
     try:
         t = await transcribe_audio_with_openclaw(
             session_id, audio_bytes, file_name, mime_type
