@@ -31,6 +31,23 @@ const TELEGRAM_SEND_MAX_ATTEMPTS = Number(
   process.env.BRIDGE_TELEGRAM_MAX_ATTEMPTS || 12
 );
 
+/** Уведомление о новом диалоге (событие Chatwoot conversation_created). */
+const BRIDGE_NEW_CONV_HOOK_URL = (
+  process.env.BRIDGE_NEW_CONV_HOOK_URL || ""
+).trim();
+const BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN = (
+  process.env.BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN || ""
+).trim();
+const BRIDGE_NEW_CONV_NOTIFY_CHAT_ID = (
+  process.env.BRIDGE_NEW_CONV_NOTIFY_CHAT_ID || ""
+).trim();
+/** Публичный URL панели Chatwoot (без /) — в Telegram добавится ссылка на диалог. */
+const BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL = (
+  process.env.BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL ||
+  process.env.FRONTEND_URL ||
+  ""
+).trim();
+
 const threadCreationLocks = new Map();
 
 function requireSecret(req, res, next) {
@@ -201,6 +218,78 @@ function extractWebhookMessageId(reqBody, message) {
     reqBody?.message?.id ??
     reqBody?.payload?.id;
   return Number.isFinite(Number(id)) ? Number(id) : null;
+}
+
+function buildNewConversationNotifyText(body) {
+  const conv = body?.conversation || body;
+  if (!conv?.id) return null;
+  const displayId = conv.display_id ?? conv.id;
+  const accId =
+    conv.account_id ??
+    body?.account?.id ??
+    body?.account_id ??
+    ACCOUNT_ID;
+  const sender = conv.meta?.sender;
+  const contact = body?.contact || sender || {};
+  const name =
+    contact.name ||
+    contact.identifier ||
+    contact.email ||
+    contact.phone_number ||
+    "Клиент";
+  const inboxId = conv.inbox_id ?? "?";
+  const lines = [
+    `Новый диалог #${displayId}`,
+    `Контакт: ${name}`,
+    `Inbox id: ${inboxId}`,
+  ];
+  const base = BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL.replace(/\/$/, "");
+  if (base) {
+    lines.push(`${base}/app/accounts/${accId}/conversations/${conv.id}`);
+  }
+  return lines.join("\n");
+}
+
+async function notifyConversationCreated(body) {
+  const text = buildNewConversationNotifyText(body);
+  if (!text) {
+    console.warn(
+      "[conversation_created] skip: no conversation in payload",
+      body?.event
+    );
+    return;
+  }
+  if (BRIDGE_NEW_CONV_HOOK_URL) {
+    try {
+      await axios.post(BRIDGE_NEW_CONV_HOOK_URL, body, {
+        timeout: 15000,
+        headers: { "Content-Type": "application/json" },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      });
+    } catch (e) {
+      console.warn("[conversation_created] hook failed:", e.message);
+    }
+  }
+  if (BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN && BRIDGE_NEW_CONV_NOTIFY_CHAT_ID) {
+    try {
+      await sendTelegramMessage(
+        BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN,
+        BRIDGE_NEW_CONV_NOTIFY_CHAT_ID,
+        text
+      );
+    } catch (e) {
+      console.warn("[conversation_created] telegram failed:", e.message);
+    }
+  }
+  if (
+    !BRIDGE_NEW_CONV_HOOK_URL &&
+    (!BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN || !BRIDGE_NEW_CONV_NOTIFY_CHAT_ID)
+  ) {
+    console.log(
+      "[conversation_created] no BRIDGE_NEW_CONV_HOOK_URL / NOTIFY_* — уведомление не отправлено"
+    );
+  }
 }
 
 /** Chatwoot soft-delete sets content_attributes.deleted (often message_updated, not message_deleted). */
@@ -541,6 +630,10 @@ app.post(
   async (req, res) => {
     try {
       const event = req.body?.event;
+      if (event === "conversation_created") {
+        await notifyConversationCreated(req.body);
+        return res.status(200).json({ ok: true, conversation_notified: true });
+      }
       if (
         event !== "message_created" &&
         event !== "message_deleted" &&
