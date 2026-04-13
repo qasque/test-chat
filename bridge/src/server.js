@@ -47,6 +47,17 @@ const BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL = (
   process.env.FRONTEND_URL ||
   ""
 ).trim();
+/**
+ * Когда слать уведомление о диалоге:
+ * - operator — только когда диалог у оператора (assignee или custom ai_handoff), не на каждое сообщение;
+ * - first_message — первое входящее (messages_count === 1);
+ * - both — любое из двух (один раз на диалог из‑за dedup).
+ */
+const BRIDGE_NEW_CONV_NOTIFY_MODE = (
+  process.env.BRIDGE_NEW_CONV_NOTIFY_MODE || "operator"
+)
+  .trim()
+  .toLowerCase();
 
 const threadCreationLocks = new Map();
 /** Чтобы не дублировать уведомление, если пришли и conversation_created, и первое message_created. */
@@ -240,11 +251,12 @@ function buildNewConversationNotifyText(body) {
     contact.phone_number ||
     "Клиент";
   const inboxId = conv.inbox_id ?? "?";
-  const lines = [
-    `Новый диалог #${displayId}`,
-    `Контакт: ${name}`,
-    `Inbox id: ${inboxId}`,
-  ];
+  const reason = (body.notify_reason || "").trim();
+  const title =
+    reason === "operator"
+      ? `Диалог #${displayId} у оператора`
+      : `Новый диалог #${displayId}`;
+  const lines = [title, `Контакт: ${name}`, `Inbox id: ${inboxId}`];
   const base = BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL.replace(/\/$/, "");
   if (base) {
     lines.push(`${base}/app/accounts/${accId}/conversations/${conv.id}`);
@@ -253,14 +265,6 @@ function buildNewConversationNotifyText(body) {
 }
 
 async function notifyConversationCreated(body) {
-  const text = buildNewConversationNotifyText(body);
-  if (!text) {
-    console.warn(
-      "[new_conv_notify] skip: no conversation in payload",
-      body?.event
-    );
-    return;
-  }
   const conv = body?.conversation || body;
   const cid = conv?.id;
   if (cid != null) {
@@ -269,7 +273,17 @@ async function notifyConversationCreated(body) {
       console.log("[new_conv_notify] dedup skip conversation", key);
       return;
     }
-    newConversationNotifyDedup.add(key);
+  }
+  const text = buildNewConversationNotifyText(body);
+  if (!text) {
+    console.warn(
+      "[new_conv_notify] skip: no conversation in payload",
+      body?.event
+    );
+    return;
+  }
+  if (cid != null) {
+    newConversationNotifyDedup.add(String(cid));
     if (newConversationNotifyDedup.size > 3000) {
       newConversationNotifyDedup.clear();
     }
@@ -307,7 +321,7 @@ async function notifyConversationCreated(body) {
   }
 }
 
-/** Первое входящее сообщение клиента (message_created), если в вебхуке нет conversation_created. */
+/** Первое входящее сообщение клиента (message_created). */
 function isFirstIncomingMessageInConversation(message) {
   if (!message || isOutgoingMessage(message)) return false;
   if (message.private === true || message.content_attributes?.private) {
@@ -323,6 +337,41 @@ function isFirstIncomingMessageInConversation(message) {
     return false;
   }
   return Number(count) === 1;
+}
+
+function conversationHasOperatorOrHandoff(conv) {
+  if (!conv) return false;
+  const assignee =
+    conv.meta?.assignee?.id ??
+    conv.assignee_id ??
+    conv.assignee?.id;
+  const h = conv.custom_attributes?.ai_handoff;
+  const handoff =
+    h === true ||
+    h === "true" ||
+    String(h || "").toLowerCase() === "true";
+  return Boolean(assignee || handoff);
+}
+
+function notifyChannelsConfigured() {
+  return Boolean(
+    BRIDGE_NEW_CONV_HOOK_URL ||
+      (BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN && BRIDGE_NEW_CONV_NOTIFY_CHAT_ID)
+  );
+}
+
+function modeAllowsFirstMessage() {
+  return (
+    BRIDGE_NEW_CONV_NOTIFY_MODE === "first_message" ||
+    BRIDGE_NEW_CONV_NOTIFY_MODE === "both"
+  );
+}
+
+function modeAllowsOperator() {
+  return (
+    BRIDGE_NEW_CONV_NOTIFY_MODE === "operator" ||
+    BRIDGE_NEW_CONV_NOTIFY_MODE === "both"
+  );
 }
 
 /** Chatwoot soft-delete sets content_attributes.deleted (often message_updated, not message_deleted). */
@@ -664,8 +713,40 @@ app.post(
     try {
       const event = req.body?.event;
       if (event === "conversation_created") {
-        await notifyConversationCreated(req.body);
-        return res.status(200).json({ ok: true, conversation_notified: true });
+        let notified = false;
+        if (
+          notifyChannelsConfigured() &&
+          modeAllowsFirstMessage()
+        ) {
+          await notifyConversationCreated(req.body);
+          notified = true;
+        }
+        return res
+          .status(200)
+          .json({ ok: true, conversation_notified: notified });
+      }
+      if (event === "conversation_updated") {
+        if (
+          modeAllowsOperator() &&
+          notifyChannelsConfigured() &&
+          conversationHasOperatorOrHandoff(
+            req.body.conversation || req.body
+          )
+        ) {
+          try {
+            await notifyConversationCreated({
+              ...req.body,
+              notify_reason: "operator",
+            });
+            console.log("[new_conv_notify] via conversation_updated");
+          } catch (e) {
+            console.warn(
+              "[new_conv_notify] conversation_updated failed:",
+              e.message
+            );
+          }
+        }
+        return res.status(200).json({ ok: true });
       }
       if (
         event !== "message_created" &&
@@ -712,22 +793,39 @@ app.post(
         return res.status(200).json({ ignored: true });
       }
 
-      if (
-        !isOutgoingMessage(message) &&
-        (BRIDGE_NEW_CONV_HOOK_URL ||
-          (BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN && BRIDGE_NEW_CONV_NOTIFY_CHAT_ID))
-      ) {
-        if (isFirstIncomingMessageInConversation(message)) {
+      if (!isOutgoingMessage(message) && notifyChannelsConfigured()) {
+        const c = message.conversation;
+        if (modeAllowsFirstMessage() && isFirstIncomingMessageInConversation(message)) {
           try {
             await notifyConversationCreated({
-              event: "conversation_created",
-              conversation: message.conversation,
-              contact:
-                message.sender || message.conversation?.meta?.sender,
+              event: "message_created",
+              conversation: c,
+              contact: message.sender || c?.meta?.sender,
             });
             console.log("[new_conv_notify] via message_created (first incoming)");
           } catch (e) {
             console.warn("[new_conv_notify] first incoming failed:", e.message);
+          }
+        } else if (
+          modeAllowsOperator() &&
+          c &&
+          conversationHasOperatorOrHandoff(c)
+        ) {
+          try {
+            await notifyConversationCreated({
+              event: "message_created",
+              conversation: c,
+              contact: message.sender || c?.meta?.sender,
+              notify_reason: "operator",
+            });
+            console.log(
+              "[new_conv_notify] via message_created (incoming, operator/handoff)"
+            );
+          } catch (e) {
+            console.warn(
+              "[new_conv_notify] message_created operator path failed:",
+              e.message
+            );
           }
         }
       }

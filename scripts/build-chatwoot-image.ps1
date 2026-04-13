@@ -1,5 +1,7 @@
 # Build custom Chatwoot image on Windows and export to .tar for the server.
 # Needs: Docker Desktop (WSL2/Linux engine).
+# Перед сборкой (опционально): звук в дашборде только после ai_handoff — см.
+#   .\scripts\apply-chatwoot-ai-handoff-audio-patch.ps1 -ChatwootRoot "C:\path\to\chatwoot-custom"
 #   .\scripts\build-chatwoot-image.ps1
 #   .\scripts\build-chatwoot-image.ps1 -ChatwootRoot "C:\path\to\chatwoot-custom"
 # Server: docker load -i chatwoot-custom_*.tar

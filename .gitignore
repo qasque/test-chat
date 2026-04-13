@@ -38,6 +38,9 @@ _ios_chat_tmp/
 # Flutter mobile app — отдельный проект, не коммитить в этот репозиторий
 apps/mobile/
 
+# Временный клон upstream Chatwoot для сверки патчей
+_cw_tmp/
+
 # Локальные скрипты монорепо (Flutter), на сервер не нужны
 scripts/clean-flutter-artifacts.ps1
 scripts/flutter-sync-to-repo.ps1

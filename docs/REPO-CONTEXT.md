@@ -6,7 +6,7 @@
 
 | Часть | Назначение |
 |--------|------------|
-| **Chatwoot (форк)** | В проде не исходники Ruby в этом репо — образ **`ghcr.io/qasque/chatwoot-custom:develop`** в `docker-compose.yml` (`rails`, `sidekiq`). Локальный стек: Postgres, Redis, Rails, Sidekiq. |
+| **Chatwoot (форк)** | В проде не исходники Ruby в этом репо — образ **`ghcr.io/qasque/chatwoot-custom:develop`** в `docker-compose.yml` (`rails`, `sidekiq`). Локальный стек: Postgres, Redis, Rails, Sidekiq. **Звук оператору только после ИИ-handoff:** патч `patches/chatwoot/ai-handoff-audio-gate.diff` (в форке `qasque/chatwoot-custom` или свой клон upstream), применение `scripts/apply-chatwoot-ai-handoff-audio-patch.ps1`, пересборка образа `scripts/build-chatwoot-image.ps1`. Откат гейта: `DISABLE_AI_HANDOFF_AUDIO_GATE=true` в `.env`. |
 | **telegram-bridge** | `bridge/` — вход из Telegram в Chatwoot, вебхук Chatwoot → обратно в Telegram, мобильный gateway (`mobile-gateway`). Порт по умолчанию **4000**. |
 | **ai-bot** | `ai-bot/` — вебхук Chatwoot → OpenClaw (`/v1/chat/completions`), ответ в диалог через Chatwoot API. Порт **5005**. |
 | **Веб-портал** | `apps/web/` — сервис `portal` в compose, прокси к bridge. |

@@ -1,0 +1,124 @@
+diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
+index 0000000..0000001 100644
+--- a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
++++ b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
+@@ -4,3 +4,22 @@ export const isConversationAssignedToMe = (message, currentUserId) =>
+   getAssignee(message) === currentUserId;
+ export const isMessageFromCurrentUser = (message, currentUserId) =>
+   message?.sender?.id === currentUserId;
++
++export const AI_HANDOFF_CUSTOM_ATTR = 'ai_handoff';
++
++/** Синхронно с ai-bot: PATCH custom_attributes.ai_handoff при переводе на оператора. */
++export const isAiHandoffToOperatorActive = conversation => {
++  if (!conversation) return false;
++  const custom = conversation.custom_attributes;
++  if (!custom || typeof custom !== 'object') return false;
++  const val = custom[AI_HANDOFF_CUSTOM_ATTR];
++  if (val === true) return true;
++  if (typeof val === 'string') {
++    const s = val.trim().toLowerCase();
++    if (s === 'true' || s === '1' || s === 'yes') return true;
++  }
++  return false;
++};
+diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js b/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
+index 0000000..0000001 100644
+--- a/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
++++ b/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
+@@ -4,6 +4,7 @@ import {
+ } from 'dashboard/constants/permissions';
+ import { getUserPermissions } from 'dashboard/helper/permissionsHelper';
+ import wootConstants from 'dashboard/constants/globals';
++import { isAiHandoffToOperatorActive } from './AudioMessageHelper';
+ 
+ class AudioNotificationStore {
+   constructor(store) {
+@@ -11,12 +12,22 @@ class AudioNotificationStore {
+   }
+ 
+   hasUnreadConversation = () => {
++    const gate =
++      typeof window !== 'undefined' &&
++      !window.chatwootConfig?.disableAiHandoffAudioGate;
++
+     const mineConversation = this.store.getters.getMineChats({
+       assigneeType: 'me',
+       status: 'open',
+     });
+ 
+-    return mineConversation.some(conv => conv.unread_count > 0);
++    return mineConversation.some(conv => {
++      if (conv.unread_count <= 0) return false;
++      if (gate && !isAiHandoffToOperatorActive(conv)) {
++        return false;
++      }
++      return true;
++    });
+   };
+ 
+   isMessageFromPendingConversation = (message = {}) => {
+diff --git a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
+index 0000000..0000001 100644
+--- a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
++++ b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
+@@ -8,6 +8,7 @@ import {
+   isConversationAssignedToMe,
+   isConversationUnassigned,
+   isMessageFromCurrentUser,
++  isAiHandoffToOperatorActive,
+ } from './AudioMessageHelper';
+ import WindowVisibilityHelper from './WindowVisibilityHelper';
+ import { useAlert } from 'dashboard/composables';
+@@ -96,6 +97,20 @@ export class DashboardAudioNotificationHelper {
+     this.playAudioEvery30Seconds();
+   };
+ 
++  resolveConversationForAudio = message => {
++    const embedded = message?.conversation;
++    const id = message?.conversation_id ?? embedded?.id;
++    if (embedded && embedded.custom_attributes !== undefined) {
++      return embedded;
++    }
++    if (id) {
++      const fromStore = this.store.store.getters.getConversationById(id);
++      if (fromStore) return fromStore;
++    }
++    return embedded || null;
++  };
++
+   shouldPlayAlert = () => {
+     if (this.notificationConfig.playAlertOnlyWhenHidden) {
+       return !WindowVisibilityHelper.isWindowVisible();
+@@ -194,6 +209,18 @@ export class DashboardAudioNotificationHelper {
+     if (messageType !== MESSAGE_TYPE.INCOMING && !isPrivate) {
+       return;
+     }
++
++    const gate =
++      typeof window !== 'undefined' &&
++      !window.chatwootConfig?.disableAiHandoffAudioGate;
++
++    if (gate) {
++      const conv = this.resolveConversationForAudio(message);
++      if (!isAiHandoffToOperatorActive(conv)) {
++        return;
++      }
++    }
+ 
+     if (WindowVisibilityHelper.isWindowVisible()) {
+       // If the user looking at the conversation, then dismiss the alert
+diff --git a/app/views/layouts/vueapp.html.erb b/app/views/layouts/vueapp.html.erb
+index 0000000..0000001 100644
+--- a/app/views/layouts/vueapp.html.erb
++++ b/app/views/layouts/vueapp.html.erb
+@@ -55,7 +55,8 @@
+         <% end %>
+         enabledLanguages: <%= available_locales_with_name.to_json.html_safe %>,
+         helpUrls: <%= feature_help_urls.to_json.html_safe %>,
+-        selectedLocale: '<%= I18n.locale %>'
++        selectedLocale: '<%= I18n.locale %>',
++        disableAiHandoffAudioGate: <%= %w[true 1 yes].include?(ENV.fetch('DISABLE_AI_HANDOFF_AUDIO_GATE', '').to_s.downcase) %>
+       }
+       window.globalConfig = <%= raw @global_config.to_json %>
+       window.browserConfig = {

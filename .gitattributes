@@ -1,2 +1,3 @@
 * text=auto
 scripts/*.sh text eol=lf
+patches/**/*.diff text eol=lf
