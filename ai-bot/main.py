@@ -19,7 +19,9 @@ OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot"
 # STT: в OpenClaw HTTP API поле model — это agent target (как в /v1/chat/completions),
 # реальную модель провайдера задают в x-openclaw-model (см. доку OpenClaw).
 OPENCLAW_STT_FORM_MODEL = (os.environ.get("OPENCLAW_STT_AGENT_MODEL") or "").strip() or OPENCLAW_MODEL
-OPENCLAW_STT_BACKEND_MODEL = (os.environ.get("OPENCLAW_STT_MODEL") or "openai/whisper-1").strip()
+OPENCLAW_STT_BACKEND_MODEL = (
+    os.environ.get("OPENCLAW_STT_MODEL") or "groq/whisper-large-v3-turbo"
+).strip()
 OPENCLAW_STT_LANGUAGE = (os.environ.get("OPENCLAW_STT_LANGUAGE") or "").strip()
 
 # Системные правила для модели (роль system в /v1/chat/completions).

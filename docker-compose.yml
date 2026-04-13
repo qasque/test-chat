@@ -114,6 +114,7 @@ services:
       - openclaw_data:/home/node/.openclaw
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
 
   ai-bot:
