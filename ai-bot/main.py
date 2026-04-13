@@ -34,6 +34,35 @@ VOICE_STT_FALLBACK_MESSAGE = (
     "Не удалось распознать голосовое сообщение. "
     "Пожалуйста, напишите ваш вопрос текстом."
 )
+# Текст, который bridge/бот подставляет вместо транскрипта (см. telegram-demo-bot buildMediaPayload).
+_MIC_EMOJI = "🎤"
+_NOTE_EMOJI = "🎵"
+_VOICE_PLACEHOLDER_CF = frozenset(
+    {
+        f"{_MIC_EMOJI} голосовое сообщение",
+        "голосовое сообщение",
+        "voice message",
+        "audio message",
+        "аудиосообщение",
+        "аудио сообщение",
+        f"{_NOTE_EMOJI} аудио",
+    }
+)
+
+
+def _is_voice_placeholder_content(content: str) -> bool:
+    t = " ".join((content or "").strip().split()).casefold()
+    if not t:
+        return True
+    if t in {x.casefold() for x in _VOICE_PLACEHOLDER_CF}:
+        return True
+    if t == f"{_MIC_EMOJI}голосовое сообщение".casefold():
+        return True
+    if t.startswith(f"{_NOTE_EMOJI} аудио".casefold()):
+        return True
+    return False
+
+
 # После handoff выставляем в диалоге, чтобы бот не отвечал поверх оператора.
 AI_HANDOFF_ATTR = "ai_handoff"
 # Стандартный путь в docker-compose (volume): ./config/ai-system-prompt.txt → контейнер
@@ -313,12 +342,9 @@ async def webhook(request: Request):
         return {"status": "ignored", "reason": "not incoming"}
 
     content = payload.get("content", "").strip()
-    # Для голосовых content у Chatwoot может быть пустым — берём текст из STT.
-    if not content:
-        att = _extract_audio_attachment(payload)
-        if not att:
-            log.info("ignored: empty content and no audio attachment")
-            return {"status": "ignored", "reason": "empty content"}
+    att = _extract_audio_attachment(payload)
+    # Пустой content или плейсхолдер от моста (см. telegram-demo-bot) + вложение → STT.
+    if att and (not content or _is_voice_placeholder_content(content)):
         try:
             audio_bytes, file_name, mime_type = await _download_attachment(att)
             conversation = payload.get("conversation", {})
@@ -344,6 +370,9 @@ async def webhook(request: Request):
                 except Exception as send_err:
                     log.error("failed to send STT fallback message: %s", send_err)
             return {"status": "ignored", "reason": f"voice stt failed: {e}"}
+    elif not content:
+        log.info("ignored: empty content and no audio attachment")
+        return {"status": "ignored", "reason": "empty content"}
 
     conversation = payload.get("conversation", {})
     # Webhook push_data: display id is often under "id", not "display_id"
