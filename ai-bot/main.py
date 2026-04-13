@@ -14,6 +14,9 @@ CHATWOOT_URL = os.environ.get("CHATWOOT_URL", "http://rails:3000")
 BOT_TOKEN = os.environ.get("CHATWOOT_BOT_TOKEN", "")
 OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://openclaw:18789").rstrip("/")
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
+# Отдельный OpenClaw только для STT (например NL), пока чат идёт на OPENCLAW_URL (РФ).
+OPENCLAW_STT_URL = (os.environ.get("OPENCLAW_STT_URL") or "").strip().rstrip("/")
+OPENCLAW_STT_TOKEN = (os.environ.get("OPENCLAW_STT_TOKEN") or "").strip() or OPENCLAW_TOKEN
 OPENCLAW_MODEL = os.environ.get("OPENCLAW_MODEL", "openclaw/default")
 OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot")
 # STT: в OpenClaw HTTP API поле model — это agent target (как в /v1/chat/completions),
@@ -30,6 +33,8 @@ GROQ_STT_URL = (
     os.environ.get("GROQ_STT_URL") or "https://api.groq.com/openai/v1/audio/transcriptions"
 ).rstrip("/")
 GROQ_STT_MODEL = (os.environ.get("GROQ_STT_MODEL") or "whisper-large-v3-turbo").strip()
+# При OPENCLAW_STT_URL прямой Groq с РФ не вызываем (403), если явно не GROQ_STT_DIRECT=1
+GROQ_STT_DIRECT = os.environ.get("GROQ_STT_DIRECT", "").strip().lower() in ("1", "true", "yes")
 
 # Прямой OpenAI Whisper (обход Groq: с серверов в РФ Groq часто отвечает 403).
 OPENAI_API_KEY_STT = (os.environ.get("OPENAI_API_KEY_STT") or os.environ.get("OPENAI_API_KEY") or "").strip()
@@ -314,9 +319,11 @@ async def transcribe_audio_with_openclaw(
     file_name: str,
     mime_type: str,
 ) -> str:
-    url = f"{OPENCLAW_URL}/v1/audio/transcriptions"
+    base = OPENCLAW_STT_URL or OPENCLAW_URL
+    token = OPENCLAW_STT_TOKEN
+    url = f"{base}/v1/audio/transcriptions"
     headers = {
-        "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "x-openclaw-session-key": session_id,
         "x-openclaw-message-channel": OPENCLAW_MESSAGE_CHANNEL,
     }
@@ -404,9 +411,12 @@ async def transcribe_audio(
     file_name: str,
     mime_type: str,
 ) -> str:
-    """Groq → OpenAI Whisper → OpenClaw (первый успешный)."""
+    """Groq (опционально) → OpenAI Whisper → OpenClaw STT (первый успешный)."""
     errs: list[str] = []
-    if GROQ_API_KEY:
+    try_direct_groq = bool(GROQ_API_KEY) and (
+        GROQ_STT_DIRECT or not OPENCLAW_STT_URL
+    )
+    if try_direct_groq:
         try:
             t = await transcribe_audio_with_groq(audio_bytes, file_name, mime_type)
             log.info("voice STT provider=groq model=%s", GROQ_STT_MODEL)
@@ -438,7 +448,10 @@ async def transcribe_audio(
         t = await transcribe_audio_with_openclaw(
             session_id, audio_bytes, file_name, mime_type
         )
-        log.info("voice STT provider=openclaw")
+        log.info(
+            "voice STT provider=openclaw base=%s",
+            OPENCLAW_STT_URL or OPENCLAW_URL,
+        )
         return t
     except Exception as e:
         errs.append(f"openclaw: {e}")
@@ -593,6 +606,7 @@ async def health():
         "openclaw_chat_api": openclaw_chat_api,
         "groq_stt_configured": bool(GROQ_API_KEY),
         "openai_stt_configured": bool(OPENAI_API_KEY_STT),
+        "openclaw_stt_remote": bool(OPENCLAW_STT_URL),
         "chatwoot_url": CHATWOOT_URL,
         "bot_token_set": bool(BOT_TOKEN),
         "system_prompt_source": src,

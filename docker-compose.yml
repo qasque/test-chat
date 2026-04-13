@@ -129,6 +129,8 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw:18789}
+      OPENCLAW_STT_URL: ${OPENCLAW_STT_URL:-}
+      OPENCLAW_STT_TOKEN: ${OPENCLAW_STT_TOKEN:-}
       OPENCLAW_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_MODEL: ${OPENCLAW_MODEL:-openclaw/default}
       # Промпт: правьте ./config/ai-system-prompt.txt на хосте (смонтирован ниже). Пустой AI_BOT_SYSTEM_PROMPT в .env.
