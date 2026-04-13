@@ -117,6 +117,20 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
 
+  # На NL: docker compose --profile nl-stt up -d stt-groq-relay
+  # Groq вызывается с IP NL (обход 403 с РФ). На MSK в ai-bot: STT_GROQ_RELAY_URL=http://IP_NL:8787/openai/v1/audio/transcriptions
+  stt-groq-relay:
+    profiles: ["nl-stt"]
+    build:
+      context: ./stt-groq-relay
+      dockerfile: Dockerfile
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      RELAY_TOKEN: ${STT_RELAY_TOKEN:-}
+    ports:
+      - "0.0.0.0:8787:8787"
+    restart: unless-stopped
+
   ai-bot:
     build:
       context: .
@@ -127,6 +141,8 @@ services:
       CHATWOOT_URL: http://rails:3000
       CHATWOOT_BOT_TOKEN: ${CHATWOOT_BOT_TOKEN:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      STT_GROQ_RELAY_URL: ${STT_GROQ_RELAY_URL:-}
+      STT_RELAY_TOKEN: ${STT_RELAY_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw:18789}
       OPENCLAW_STT_URL: ${OPENCLAW_STT_URL:-}

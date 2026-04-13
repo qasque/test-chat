@@ -35,6 +35,9 @@ GROQ_STT_URL = (
 GROQ_STT_MODEL = (os.environ.get("GROQ_STT_MODEL") or "whisper-large-v3-turbo").strip()
 # При OPENCLAW_STT_URL прямой Groq с РФ не вызываем (403), если явно не GROQ_STT_DIRECT=1
 GROQ_STT_DIRECT = os.environ.get("GROQ_STT_DIRECT", "").strip().lower() in ("1", "true", "yes")
+# Прокси Groq на NL (см. stt-groq-relay, profile nl-stt): запрос к Groq идёт с IP Нидерландов.
+STT_GROQ_RELAY_URL = (os.environ.get("STT_GROQ_RELAY_URL") or "").strip().rstrip("/")
+STT_RELAY_TOKEN = (os.environ.get("STT_RELAY_TOKEN") or "").strip()
 
 # Прямой OpenAI Whisper (обход Groq: с серверов в РФ Groq часто отвечает 403).
 OPENAI_API_KEY_STT = (os.environ.get("OPENAI_API_KEY_STT") or os.environ.get("OPENAI_API_KEY") or "").strip()
@@ -377,6 +380,41 @@ async def transcribe_audio_with_groq(
     raise RuntimeError("Groq STT empty transcription")
 
 
+async def transcribe_audio_via_groq_relay(
+    audio_bytes: bytes,
+    file_name: str,
+    mime_type: str,
+) -> str:
+    if not STT_GROQ_RELAY_URL:
+        raise RuntimeError("STT_GROQ_RELAY_URL not set")
+    base = STT_GROQ_RELAY_URL.rstrip("/")
+    if base.endswith("/audio/transcriptions"):
+        url = base
+    else:
+        url = f"{base}/openai/v1/audio/transcriptions"
+    headers = {}
+    if STT_RELAY_TOKEN:
+        headers["X-Relay-Token"] = STT_RELAY_TOKEN
+    data = {"model": GROQ_STT_MODEL}
+    if OPENCLAW_STT_LANGUAGE:
+        data["language"] = OPENCLAW_STT_LANGUAGE
+    files = {"file": (file_name, audio_bytes, mime_type)}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, headers=headers, data=data, files=files)
+    if resp.is_error:
+        raise RuntimeError(
+            f"Groq relay STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
+        )
+    try:
+        parsed = resp.json()
+    except Exception as e:
+        raise RuntimeError(f"Groq relay STT invalid JSON: {e}") from e
+    text = parsed.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    raise RuntimeError("Groq relay STT empty transcription")
+
+
 async def transcribe_audio_with_openai(
     audio_bytes: bytes,
     file_name: str,
@@ -411,7 +449,7 @@ async def transcribe_audio(
     file_name: str,
     mime_type: str,
 ) -> str:
-    """Groq (опционально) → OpenAI Whisper → OpenClaw STT (первый успешный)."""
+    """Прямой Groq (опц.) → OpenClaw STT → Groq relay NL → OpenAI Whisper."""
     errs: list[str] = []
     try_direct_groq = bool(GROQ_API_KEY) and (
         GROQ_STT_DIRECT or not OPENCLAW_STT_URL
@@ -429,21 +467,8 @@ async def transcribe_audio(
                     e,
                 )
             else:
-                log.warning("Groq STT failed, trying OpenAI/OpenClaw: %s", e)
-    if OPENAI_API_KEY_STT:
-        try:
-            t = await transcribe_audio_with_openai(audio_bytes, file_name, mime_type)
-            log.info("voice STT provider=openai model=%s", OPENAI_STT_MODEL)
-            return t
-        except Exception as e:
-            errs.append(f"openai: {e}")
-            log.warning("OpenAI STT failed, trying OpenClaw: %s", e)
-    else:
-        log.warning(
-            "Whisper (OpenAI) пропущен: нет OPENAI_API_KEY в контейнере ai-bot. "
-            "Выполните на сервере: git pull && docker compose up -d --build ai-bot. "
-            "Ключ DeepSeek не подходит для https://api.openai.com/v1/audio/transcriptions — нужен отдельный ключ OpenAI."
-        )
+                log.warning("Groq STT failed, trying OpenClaw: %s", e)
+
     try:
         t = await transcribe_audio_with_openclaw(
             session_id, audio_bytes, file_name, mime_type
@@ -455,6 +480,34 @@ async def transcribe_audio(
         return t
     except Exception as e:
         errs.append(f"openclaw: {e}")
+        log.warning("OpenClaw STT failed: %s", e)
+
+    if STT_GROQ_RELAY_URL:
+        try:
+            t = await transcribe_audio_via_groq_relay(
+                audio_bytes, file_name, mime_type
+            )
+            log.info("voice STT provider=groq-relay model=%s", GROQ_STT_MODEL)
+            return t
+        except Exception as e:
+            errs.append(f"groq-relay: {e}")
+            log.warning("Groq relay STT failed: %s", e)
+
+    if OPENAI_API_KEY_STT:
+        try:
+            t = await transcribe_audio_with_openai(audio_bytes, file_name, mime_type)
+            log.info("voice STT provider=openai model=%s", OPENAI_STT_MODEL)
+            return t
+        except Exception as e:
+            errs.append(f"openai: {e}")
+            log.warning(
+                "OpenAI STT failed (в РФ часто unsupported_country_region_territory): %s",
+                e,
+            )
+    else:
+        log.info(
+            "OpenAI Whisper пропущен: нет OPENAI_API_KEY в ai-bot (для РФ обычно не нужен при groq-relay)."
+        )
     raise RuntimeError(" | ".join(errs) if errs else "STT failed")
 
 
@@ -607,6 +660,7 @@ async def health():
         "groq_stt_configured": bool(GROQ_API_KEY),
         "openai_stt_configured": bool(OPENAI_API_KEY_STT),
         "openclaw_stt_remote": bool(OPENCLAW_STT_URL),
+        "stt_groq_relay_configured": bool(STT_GROQ_RELAY_URL),
         "chatwoot_url": CHATWOOT_URL,
         "bot_token_set": bool(BOT_TOKEN),
         "system_prompt_source": src,
