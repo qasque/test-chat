@@ -1,5 +1,5 @@
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
-index 0590b1a58..c768e2d7e 100644
+index 0590b1a58..fe978256b 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
 @@ -4,3 +4,19 @@ export const isConversationAssignedToMe = (message, currentUserId) =>
@@ -15,7 +15,7 @@ index 0590b1a58..c768e2d7e 100644
 +  const custom = conversation.custom_attributes;
 +  if (!custom || typeof custom !== 'object') return false;
 +  const val = custom[AI_HANDOFF_CUSTOM_ATTR];
-+  if (val === true) return true;
++  if (val === true || val === 1) return true;
 +  if (typeof val === 'string') {
 +    const s = val.trim().toLowerCase();
 +    if (s === 'true' || s === '1' || s === 'yes') return true;
@@ -59,7 +59,7 @@ index 30deca003..07a744577 100644
  
    isMessageFromPendingConversation = (message = {}) => {
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
-index 9e79bb3a2..b19eada09 100644
+index 9e79bb3a2..07a766a6e 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
 @@ -6,6 +6,7 @@ import { EVENT_TYPES } from 'dashboard/routes/dashboard/settings/profile/constan
@@ -70,27 +70,30 @@ index 9e79bb3a2..b19eada09 100644
    isConversationAssignedToMe,
    isConversationUnassigned,
    isMessageFromCurrentUser,
-@@ -97,6 +98,19 @@ export class DashboardAudioNotificationHelper {
+@@ -97,6 +98,22 @@ export class DashboardAudioNotificationHelper {
      this.playAudioEvery30Seconds();
    };
  
-+  resolveConversationForAudio = message => {
++  /**
++   * WebSocket message often carries a stale `conversation`; store is updated
++   * from conversation.updated. OR both so handoff is detected after AI→operator.
++   */
++  isHandoffActiveForMessage = message => {
 +    const embedded = message?.conversation;
 +    const id = message?.conversation_id ?? embedded?.id;
-+    if (embedded && embedded.custom_attributes !== undefined) {
-+      return embedded;
-+    }
-+    if (id) {
-+      const fromStore = this.store.store.getters.getConversationById(id);
-+      if (fromStore) return fromStore;
-+    }
-+    return embedded || null;
++    const fromStore = id
++      ? this.store.store.getters.getConversationById(id)
++      : null;
++    return (
++      isAiHandoffToOperatorActive(fromStore) ||
++      isAiHandoffToOperatorActive(embedded)
++    );
 +  };
 +
    shouldPlayAlert = () => {
      if (this.notificationConfig.playAlertOnlyWhenHidden) {
        return !WindowVisibilityHelper.isWindowVisible();
-@@ -196,6 +210,17 @@ export class DashboardAudioNotificationHelper {
+@@ -196,6 +213,14 @@ export class DashboardAudioNotificationHelper {
        return;
      }
  
@@ -98,11 +101,8 @@ index 9e79bb3a2..b19eada09 100644
 +      typeof window !== 'undefined' &&
 +      !window.chatwootConfig?.disableAiHandoffAudioGate;
 +
-+    if (gate) {
-+      const conv = this.resolveConversationForAudio(message);
-+      if (!isAiHandoffToOperatorActive(conv)) {
-+        return;
-+      }
++    if (gate && !this.isHandoffActiveForMessage(message)) {
++      return;
 +    }
 +
      if (WindowVisibilityHelper.isWindowVisible()) {
