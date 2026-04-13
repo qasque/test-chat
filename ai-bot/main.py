@@ -31,6 +31,13 @@ GROQ_STT_URL = (
 ).rstrip("/")
 GROQ_STT_MODEL = (os.environ.get("GROQ_STT_MODEL") or "whisper-large-v3-turbo").strip()
 
+# Прямой OpenAI Whisper (обход Groq: с серверов в РФ Groq часто отвечает 403).
+OPENAI_API_KEY_STT = (os.environ.get("OPENAI_API_KEY_STT") or os.environ.get("OPENAI_API_KEY") or "").strip()
+OPENAI_STT_URL = (
+    os.environ.get("OPENAI_STT_URL") or "https://api.openai.com/v1/audio/transcriptions"
+).rstrip("/")
+OPENAI_STT_MODEL = (os.environ.get("OPENAI_STT_MODEL") or "whisper-1").strip()
+
 # Системные правила для модели (роль system в /v1/chat/completions).
 # Переопределение: AI_BOT_SYSTEM_PROMPT в .env или файл AI_BOT_SYSTEM_PROMPT_FILE в контейнере.
 DEFAULT_AI_SYSTEM_PROMPT = """Ты — ассистент поддержки в чате (Telegram или сайт). Отвечай вежливо, по делу, без лишней воды.
@@ -363,13 +370,41 @@ async def transcribe_audio_with_groq(
     raise RuntimeError("Groq STT empty transcription")
 
 
+async def transcribe_audio_with_openai(
+    audio_bytes: bytes,
+    file_name: str,
+    mime_type: str,
+) -> str:
+    if not OPENAI_API_KEY_STT:
+        raise RuntimeError("OPENAI_API_KEY_STT/OPENAI_API_KEY not set")
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY_STT}"}
+    data = {"model": OPENAI_STT_MODEL}
+    if OPENCLAW_STT_LANGUAGE:
+        data["language"] = OPENCLAW_STT_LANGUAGE
+    files = {"file": (file_name, audio_bytes, mime_type)}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(OPENAI_STT_URL, headers=headers, data=data, files=files)
+    if resp.is_error:
+        raise RuntimeError(
+            f"OpenAI STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
+        )
+    try:
+        parsed = resp.json()
+    except Exception as e:
+        raise RuntimeError(f"OpenAI STT invalid JSON: {e}") from e
+    text = parsed.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    raise RuntimeError("OpenAI STT empty transcription")
+
+
 async def transcribe_audio(
     session_id: str,
     audio_bytes: bytes,
     file_name: str,
     mime_type: str,
 ) -> str:
-    """Сначала Groq (если задан ключ), иначе или при ошибке — OpenClaw."""
+    """Groq → OpenAI Whisper → OpenClaw (первый успешный)."""
     errs: list[str] = []
     if GROQ_API_KEY:
         try:
@@ -378,7 +413,21 @@ async def transcribe_audio(
             return t
         except Exception as e:
             errs.append(f"groq: {e}")
-            log.warning("Groq STT failed, trying OpenClaw: %s", e)
+            if "403" in str(e):
+                log.warning(
+                    "Groq STT failed (403 часто из-за региона: Groq недоступен в РФ и др.): %s",
+                    e,
+                )
+            else:
+                log.warning("Groq STT failed, trying OpenAI/OpenClaw: %s", e)
+    if OPENAI_API_KEY_STT:
+        try:
+            t = await transcribe_audio_with_openai(audio_bytes, file_name, mime_type)
+            log.info("voice STT provider=openai model=%s", OPENAI_STT_MODEL)
+            return t
+        except Exception as e:
+            errs.append(f"openai: {e}")
+            log.warning("OpenAI STT failed, trying OpenClaw: %s", e)
     try:
         t = await transcribe_audio_with_openclaw(
             session_id, audio_bytes, file_name, mime_type
@@ -537,6 +586,7 @@ async def health():
         "openclaw_reachable": openclaw_ok,
         "openclaw_chat_api": openclaw_chat_api,
         "groq_stt_configured": bool(GROQ_API_KEY),
+        "openai_stt_configured": bool(OPENAI_API_KEY_STT),
         "chatwoot_url": CHATWOOT_URL,
         "bot_token_set": bool(BOT_TOKEN),
         "system_prompt_source": src,
