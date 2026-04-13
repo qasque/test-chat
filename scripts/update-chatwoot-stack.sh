@@ -17,8 +17,11 @@ fi
 echo ">>> git pull в chatwoot"
 git -C chatwoot pull
 
-echo ">>> docker compose build rails sidekiq"
-docker compose build rails sidekiq
+# Подряд, не параллельно: иначе два раза гоняется precompile (OOM / «зависание» на шаге Vite).
+echo ">>> docker compose build rails (шаг assets:precompile + Vite — на VPS часто 15–45+ мин)"
+docker compose build rails
+echo ">>> docker compose build sidekiq"
+docker compose build sidekiq
 
 echo ">>> docker compose up -d rails sidekiq"
 docker compose up -d rails sidekiq

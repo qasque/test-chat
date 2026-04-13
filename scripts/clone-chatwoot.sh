@@ -24,4 +24,4 @@ if [ ! -f chatwoot/docker/Dockerfile ]; then
 fi
 
 echo "Готово: $ROOT/chatwoot"
-echo "Далее: docker compose build rails sidekiq && docker compose up -d"
+echo "Далее: docker compose build rails && docker compose build sidekiq && docker compose up -d"

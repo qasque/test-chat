@@ -4,7 +4,8 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
 
   chmod +x scripts/clone-chatwoot.sh scripts/update-chatwoot-stack.sh
   ./scripts/clone-chatwoot.sh
-  docker compose build rails sidekiq
+  docker compose build rails
+  docker compose build sidekiq
   docker compose up -d
 
 Обновить код форка (фронт + бэк) после git push в репозиторий Chatwoot:
@@ -14,7 +15,8 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
 Вручную то же самое:
 
   cd chatwoot && git pull && cd ..
-  docker compose build rails sidekiq
+  docker compose build rails
+  docker compose build sidekiq
   docker compose up -d rails sidekiq
 
 Репозиторий по умолчанию: https://github.com/qasque/chatwoot-custom.git
@@ -24,11 +26,16 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
 
 Ошибка «pull access denied … repository does not exist»:
   образ qasque-chatwoot:local есть только после сборки. Сначала:
- docker compose build rails sidekiq
+ docker compose build rails && docker compose build sidekiq
   не запускайте up до успешного build. Имя образа в compose должно быть qasque-chatwoot:local (не опечатка qosque-chatbot).
 
+«Зависание» на шаге ~27 (rake assets:precompile / Vite transforming):
+  это нормально — самый тяжёлый этап. На слабом CPU/RAM ждите до часа. Смотреть прогресс:
+ docker compose build --progress=plain rails
+  Не хватает памяти: добавьте swap или соберите образ на другой машине (scripts/build-chatwoot-image.ps1 + docker load).
+
 Если раньше использовали только GHCR: после git pull test-chat выполните ./scripts/clone-chatwoot.sh,
-затем docker compose build rails sidekiq && docker compose up -d rails sidekiq.
+затем docker compose build rails && docker compose build sidekiq && docker compose up -d rails sidekiq.
 
 Чтобы снова использовать только готовый образ без сборки на сервере:
- в docker-compose.yml у сервиса base закомментируйте build, раскомментируйте image: ghcr.io/qasque/chatwoot-custom:develop
+ в docker-compose.yml у rails/sidekiq уберите build, оставьте image: ghcr.io/qasque/chatwoot-custom:develop
