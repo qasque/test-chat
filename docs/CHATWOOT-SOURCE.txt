@@ -22,6 +22,11 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
 
 Без локальной папки chatwoot/docker/Dockerfile сборка rails не запустится.
 
+Ошибка «pull access denied … repository does not exist»:
+  образ qasque-chatwoot:local есть только после сборки. Сначала:
+ docker compose build rails sidekiq
+  не запускайте up до успешного build. Имя образа в compose должно быть qasque-chatwoot:local (не опечатка qosque-chatbot).
+
 Если раньше использовали только GHCR: после git pull test-chat выполните ./scripts/clone-chatwoot.sh,
 затем docker compose build rails sidekiq && docker compose up -d rails sidekiq.
 

@@ -3,23 +3,23 @@
 # Rails/Sidekiq: образ собирается из ./chatwoot (клон форка с docker/Dockerfile).
 # Первый раз: scripts/clone-chatwoot.sh
 # Обновить фронт с git: scripts/update-chatwoot-stack.sh
-# Только GHCR без сборки: закомментируйте build, раскомментируйте image у base.
+# Только GHCR без сборки: у rails/sidekiq замените build+image на одну строку image: ghcr.io/...
 
 name: chatwoot-stack
 
-services:
-  base: &base
-    build:
-      context: ./chatwoot
-      dockerfile: docker/Dockerfile
-    image: qasque-chatwoot:local
-    # image: ghcr.io/qasque/chatwoot-custom:develop
-    env_file: .env
-    volumes:
-      - storage_data:/app/storage
+# Общие настройки образа Chatwoot (не отдельный контейнер — иначе compose пытается pull «base»).
+x-chatwoot-app: &chatwoot-app
+  build:
+    context: ./chatwoot
+    dockerfile: docker/Dockerfile
+  image: qasque-chatwoot:local
+  env_file: .env
+  volumes:
+    - storage_data:/app/storage
 
+services:
   rails:
-    <<: *base
+    <<: *chatwoot-app
     depends_on:
       - postgres
       - redis
@@ -34,7 +34,7 @@ services:
     restart: always
 
   sidekiq:
-    <<: *base
+    <<: *chatwoot-app
     depends_on:
       - postgres
       - redis
