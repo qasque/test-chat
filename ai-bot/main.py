@@ -16,7 +16,10 @@ OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://openclaw:18789").rstrip("/
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
 OPENCLAW_MODEL = os.environ.get("OPENCLAW_MODEL", "openclaw/default")
 OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot")
-OPENCLAW_STT_MODEL = os.environ.get("OPENCLAW_STT_MODEL", "whisper-1")
+# STT: в OpenClaw HTTP API поле model — это agent target (как в /v1/chat/completions),
+# реальную модель провайдера задают в x-openclaw-model (см. доку OpenClaw).
+OPENCLAW_STT_FORM_MODEL = (os.environ.get("OPENCLAW_STT_AGENT_MODEL") or "").strip() or OPENCLAW_MODEL
+OPENCLAW_STT_BACKEND_MODEL = (os.environ.get("OPENCLAW_STT_MODEL") or "openai/whisper-1").strip()
 OPENCLAW_STT_LANGUAGE = (os.environ.get("OPENCLAW_STT_LANGUAGE") or "").strip()
 
 # Системные правила для модели (роль system в /v1/chat/completions).
@@ -296,8 +299,14 @@ async def transcribe_audio_with_openclaw(
     mime_type: str,
 ) -> str:
     url = f"{OPENCLAW_URL}/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {OPENCLAW_TOKEN}"}
-    data = {"model": OPENCLAW_STT_MODEL}
+    headers = {
+        "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+        "x-openclaw-session-key": session_id,
+        "x-openclaw-message-channel": OPENCLAW_MESSAGE_CHANNEL,
+    }
+    if OPENCLAW_STT_BACKEND_MODEL:
+        headers["x-openclaw-model"] = OPENCLAW_STT_BACKEND_MODEL
+    data = {"model": OPENCLAW_STT_FORM_MODEL}
     if OPENCLAW_STT_LANGUAGE:
         data["language"] = OPENCLAW_STT_LANGUAGE
     files = {"file": (file_name, audio_bytes, mime_type)}
