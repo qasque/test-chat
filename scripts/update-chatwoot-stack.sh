@@ -14,8 +14,10 @@ if [ ! -d chatwoot/.git ]; then
   exit 1
 fi
 
-echo ">>> git pull в chatwoot"
-git -C chatwoot pull
+echo ">>> git: ветка develop + pull в chatwoot"
+git -C chatwoot fetch origin
+git -C chatwoot checkout develop
+git -C chatwoot pull origin develop
 
 # Подряд, не параллельно: иначе два раза гоняется precompile (OOM / «зависание» на шаге Vite).
 echo ">>> docker compose build rails (шаг assets:precompile + Vite — на VPS часто 15–45+ мин)"

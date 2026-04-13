@@ -19,8 +19,12 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
   docker compose build sidekiq
   docker compose up -d rails sidekiq
 
-Репозиторий по умолчанию: https://github.com/qasque/chatwoot-custom.git
+Репозиторий по умолчанию: https://github.com/qasque/chatwoot-custom.git (ветка develop)
 Другой URL: CHATWOOT_GIT_URL=https://github.com/you/fork.git ./scripts/clone-chatwoot.sh
+
+Важно: не используйте в проде ветку main этого форка для сборки — там другая история.
+ Все доработки (быстрые ответы в сайдбаре, заметки, задачи, Kosmos UI) собираются из develop.
+ Если уже клонировали на main: cd chatwoot && git fetch origin && git checkout develop && git pull
 
 Без локальной папки chatwoot/docker/Dockerfile сборка rails не запустится.
 

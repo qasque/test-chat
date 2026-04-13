@@ -16,7 +16,8 @@ if [ -d chatwoot ] && [ -n "$(ls -A chatwoot 2>/dev/null)" ]; then
 fi
 
 rm -rf chatwoot
-git clone "$URL" chatwoot
+# Ветка main в форке отстаёт/не совпадает с рабочей линией; фичи и Kosmos — в develop.
+git clone -b develop "$URL" chatwoot
 
 if [ ! -f chatwoot/docker/Dockerfile ]; then
   echo "Ошибка: после клона нет chatwoot/docker/Dockerfile"
