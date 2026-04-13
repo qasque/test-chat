@@ -38,6 +38,7 @@ apps/mobile/
 
 # Локальные скрипты монорепо (Flutter), на сервер не нужны
 scripts/clean-flutter-artifacts.ps1
+scripts/flutter-sync-to-repo.ps1
 scripts/git-stage-android-chat.ps1
 scripts/git-stage-ios-chat.ps1
 
