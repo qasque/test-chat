@@ -1,10 +1,19 @@
 # Chatwoot + telegram-bridge stack (based on upstream docker-compose.production.yaml)
+#
+# Rails/Sidekiq: образ собирается из ./chatwoot (клон форка с docker/Dockerfile).
+# Первый раз: scripts/clone-chatwoot.sh
+# Обновить фронт с git: scripts/update-chatwoot-stack.sh
+# Только GHCR без сборки: закомментируйте build, раскомментируйте image у base.
 
 name: chatwoot-stack
 
 services:
   base: &base
-    image: ghcr.io/qasque/chatwoot-custom:develop
+    build:
+      context: ./chatwoot
+      dockerfile: docker/Dockerfile
+    image: qasque-chatwoot:local
+    # image: ghcr.io/qasque/chatwoot-custom:develop
     env_file: .env
     volumes:
       - storage_data:/app/storage

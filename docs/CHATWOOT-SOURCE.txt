@@ -1,0 +1,29 @@
+Chatwoot в этом стеке — исходники в папке chatwoot/ (не в git test-chat).
+
+Первый раз на сервере (из корня test-chat):
+
+  chmod +x scripts/clone-chatwoot.sh scripts/update-chatwoot-stack.sh
+  ./scripts/clone-chatwoot.sh
+  docker compose build rails sidekiq
+  docker compose up -d
+
+Обновить код форка (фронт + бэк) после git push в репозиторий Chatwoot:
+
+  ./scripts/update-chatwoot-stack.sh
+
+Вручную то же самое:
+
+  cd chatwoot && git pull && cd ..
+  docker compose build rails sidekiq
+  docker compose up -d rails sidekiq
+
+Репозиторий по умолчанию: https://github.com/qasque/chatwoot-custom.git
+Другой URL: CHATWOOT_GIT_URL=https://github.com/you/fork.git ./scripts/clone-chatwoot.sh
+
+Без локальной папки chatwoot/docker/Dockerfile сборка rails не запустится.
+
+Если раньше использовали только GHCR: после git pull test-chat выполните ./scripts/clone-chatwoot.sh,
+затем docker compose build rails sidekiq && docker compose up -d rails sidekiq.
+
+Чтобы снова использовать только готовый образ без сборки на сервере:
+ в docker-compose.yml у сервиса base закомментируйте build, раскомментируйте image: ghcr.io/qasque/chatwoot-custom:develop
