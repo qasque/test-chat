@@ -40,7 +40,8 @@ index 30deca003..07a744577 100644
    hasUnreadConversation = () => {
 +    const gate =
 +      typeof window !== 'undefined' &&
-+      !window.chatwootConfig?.disableAiHandoffAudioGate;
++      Boolean(window.chatwootConfig) &&
++      !window.chatwootConfig.disableAiHandoffAudioGate;
 +
      const mineConversation = this.store.getters.getMineChats({
        assigneeType: 'me',
@@ -99,7 +100,8 @@ index 9e79bb3a2..07a766a6e 100644
  
 +    const gate =
 +      typeof window !== 'undefined' &&
-+      !window.chatwootConfig?.disableAiHandoffAudioGate;
++      Boolean(window.chatwootConfig) &&
++      !window.chatwootConfig.disableAiHandoffAudioGate;
 +
 +    if (gate && !this.isHandoffActiveForMessage(message)) {
 +      return;
