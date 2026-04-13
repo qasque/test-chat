@@ -16,6 +16,8 @@ OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://openclaw:18789").rstrip("/
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
 OPENCLAW_MODEL = os.environ.get("OPENCLAW_MODEL", "openclaw/default")
 OPENCLAW_MESSAGE_CHANNEL = os.environ.get("OPENCLAW_MESSAGE_CHANNEL", "chatwoot")
+OPENCLAW_STT_MODEL = os.environ.get("OPENCLAW_STT_MODEL", "whisper-1")
+OPENCLAW_STT_LANGUAGE = (os.environ.get("OPENCLAW_STT_LANGUAGE") or "").strip()
 
 # Системные правила для модели (роль system в /v1/chat/completions).
 # Переопределение: AI_BOT_SYSTEM_PROMPT в .env или файл AI_BOT_SYSTEM_PROMPT_FILE в контейнере.
@@ -28,6 +30,10 @@ DEFAULT_AI_SYSTEM_PROMPT = """Ты — ассистент поддержки в 
 
 HANDOFF_MARKER = "[HANDOFF]"
 HANDOFF_MESSAGE = "Перевожу вас на оператора, ожидайте..."
+VOICE_STT_FALLBACK_MESSAGE = (
+    "Не удалось распознать голосовое сообщение. "
+    "Пожалуйста, напишите ваш вопрос текстом."
+)
 # После handoff выставляем в диалоге, чтобы бот не отвечал поверх оператора.
 AI_HANDOFF_ATTR = "ai_handoff"
 # Стандартный путь в docker-compose (volume): ./config/ai-system-prompt.txt → контейнер
@@ -182,6 +188,106 @@ async def ask_openclaw(session_id: str, message: str) -> str:
     return _chat_completion_text(data)
 
 
+def _extract_audio_attachment(payload: dict) -> dict | None:
+    """Возвращает первое аудио-вложение из webhook payload (если есть)."""
+    attachments = payload.get("attachments")
+    if not isinstance(attachments, list):
+        msg = payload.get("message")
+        if isinstance(msg, dict):
+            attachments = msg.get("attachments")
+    if not isinstance(attachments, list):
+        return None
+
+    for raw in attachments:
+        if not isinstance(raw, dict):
+            continue
+        file_type = (raw.get("file_type") or raw.get("type") or "").lower()
+        content_type = (
+            raw.get("content_type")
+            or raw.get("file_content_type")
+            or raw.get("mime_type")
+            or ""
+        ).lower()
+        is_audio = (
+            "audio" in file_type
+            or file_type in {"voice", "ptt"}
+            or content_type.startswith("audio/")
+            or content_type in {"application/ogg", "application/octet-stream"}
+        )
+        if not is_audio:
+            continue
+        return raw
+    return None
+
+
+def _attachment_url(att: dict) -> str | None:
+    for k in ("data_url", "url", "download_url", "thumb_url"):
+        v = att.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _attachment_filename(att: dict) -> str:
+    for k in ("file_name", "filename", "name"):
+        v = att.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return "voice.ogg"
+
+
+def _attachment_mime(att: dict) -> str:
+    for k in ("content_type", "file_content_type", "mime_type"):
+        v = att.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return "audio/ogg"
+
+
+async def _download_attachment(att: dict) -> tuple[bytes, str, str]:
+    url = _attachment_url(att)
+    if not url:
+        raise RuntimeError("audio attachment URL missing")
+    headers = {}
+    if BOT_TOKEN:
+        headers["api_access_token"] = BOT_TOKEN
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        body = resp.content
+    if not body:
+        raise RuntimeError("audio attachment is empty")
+    return body, _attachment_filename(att), _attachment_mime(att)
+
+
+async def transcribe_audio_with_openclaw(
+    session_id: str,
+    audio_bytes: bytes,
+    file_name: str,
+    mime_type: str,
+) -> str:
+    url = f"{OPENCLAW_URL}/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {OPENCLAW_TOKEN}"}
+    data = {"model": OPENCLAW_STT_MODEL}
+    if OPENCLAW_STT_LANGUAGE:
+        data["language"] = OPENCLAW_STT_LANGUAGE
+    files = {"file": (file_name, audio_bytes, mime_type)}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, headers=headers, data=data, files=files)
+    if resp.is_error:
+        raise RuntimeError(
+            f"OpenClaw STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
+        )
+    try:
+        parsed = resp.json()
+    except Exception as e:
+        raise RuntimeError(f"OpenClaw STT invalid JSON: {e}") from e
+    text = parsed.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    raise RuntimeError("OpenClaw STT empty transcription")
+
+
 def _looks_like_openclaw_models_json(text: str) -> bool:
     s = (text or "").lstrip()
     if not s.startswith("{"):
@@ -207,9 +313,37 @@ async def webhook(request: Request):
         return {"status": "ignored", "reason": "not incoming"}
 
     content = payload.get("content", "").strip()
+    # Для голосовых content у Chatwoot может быть пустым — берём текст из STT.
     if not content:
-        log.info("ignored: empty content")
-        return {"status": "ignored", "reason": "empty content"}
+        att = _extract_audio_attachment(payload)
+        if not att:
+            log.info("ignored: empty content and no audio attachment")
+            return {"status": "ignored", "reason": "empty content"}
+        try:
+            audio_bytes, file_name, mime_type = await _download_attachment(att)
+            conversation = payload.get("conversation", {})
+            tmp_conv_id = conversation.get("display_id") or conversation.get("id") or "unknown"
+            tmp_acc_id = payload.get("account", {}).get("id") or "unknown"
+            stt_session = f"chatwoot-{tmp_acc_id}-{tmp_conv_id}"
+            content = await transcribe_audio_with_openclaw(
+                stt_session, audio_bytes, file_name, mime_type
+            )
+            log.info("voice transcribed conv=%s text='%s'", tmp_conv_id, content[:80])
+        except Exception as e:
+            log.error("voice transcription failed: %s", e)
+            conversation = payload.get("conversation", {})
+            conversation_id = conversation.get("display_id") or conversation.get("id")
+            account_id = payload.get("account", {}).get("id")
+            if conversation_id and account_id:
+                try:
+                    await send_reply(
+                        account_id,
+                        conversation_id,
+                        VOICE_STT_FALLBACK_MESSAGE,
+                    )
+                except Exception as send_err:
+                    log.error("failed to send STT fallback message: %s", send_err)
+            return {"status": "ignored", "reason": f"voice stt failed: {e}"}
 
     conversation = payload.get("conversation", {})
     # Webhook push_data: display id is often under "id", not "display_id"
