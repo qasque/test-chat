@@ -1,8 +1,8 @@
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
-index 0000000..0000001 100644
+index 0590b1a58..22a5443ff 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/AudioMessageHelper.js
-@@ -4,3 +4,22 @@ export const isConversationAssignedToMe = (message, currentUserId) =>
+@@ -4,3 +4,19 @@ export const isConversationAssignedToMe = (message, currentUserId) =>
    getAssignee(message) === currentUserId;
  export const isMessageFromCurrentUser = (message, currentUserId) =>
    message?.sender?.id === currentUserId;
@@ -23,7 +23,7 @@ index 0000000..0000001 100644
 +  return false;
 +};
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js b/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
-index 0000000..0000001 100644
+index 30deca003..07a744577 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/AudioNotificationStore.js
 @@ -4,6 +4,7 @@ import {
@@ -59,10 +59,10 @@ index 0000000..0000001 100644
  
    isMessageFromPendingConversation = (message = {}) => {
 diff --git a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
-index 0000000..0000001 100644
+index 9e79bb3a2..a91a167b9 100644
 --- a/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
 +++ b/app/javascript/dashboard/helper/AudioAlerts/DashboardAudioNotificationHelper.js
-@@ -8,6 +8,7 @@ import {
+@@ -9,6 +9,7 @@ import {
    isConversationAssignedToMe,
    isConversationUnassigned,
    isMessageFromCurrentUser,
@@ -70,7 +70,7 @@ index 0000000..0000001 100644
  } from './AudioMessageHelper';
  import WindowVisibilityHelper from './WindowVisibilityHelper';
  import { useAlert } from 'dashboard/composables';
-@@ -96,6 +97,20 @@ export class DashboardAudioNotificationHelper {
+@@ -97,6 +98,19 @@ export class DashboardAudioNotificationHelper {
      this.playAudioEvery30Seconds();
    };
  
@@ -90,11 +90,10 @@ index 0000000..0000001 100644
    shouldPlayAlert = () => {
      if (this.notificationConfig.playAlertOnlyWhenHidden) {
        return !WindowVisibilityHelper.isWindowVisible();
-@@ -194,6 +209,18 @@ export class DashboardAudioNotificationHelper {
-     if (messageType !== MESSAGE_TYPE.INCOMING && !isPrivate) {
+@@ -196,6 +210,17 @@ export class DashboardAudioNotificationHelper {
        return;
      }
-+
+ 
 +    const gate =
 +      typeof window !== 'undefined' &&
 +      !window.chatwootConfig?.disableAiHandoffAudioGate;
@@ -105,11 +104,12 @@ index 0000000..0000001 100644
 +        return;
 +      }
 +    }
- 
++
      if (WindowVisibilityHelper.isWindowVisible()) {
        // If the user looking at the conversation, then dismiss the alert
+       if (this.store.isMessageFromCurrentConversation(message)) {
 diff --git a/app/views/layouts/vueapp.html.erb b/app/views/layouts/vueapp.html.erb
-index 0000000..0000001 100644
+index d97ece981..a6dcd5a7f 100644
 --- a/app/views/layouts/vueapp.html.erb
 +++ b/app/views/layouts/vueapp.html.erb
 @@ -55,7 +55,8 @@
