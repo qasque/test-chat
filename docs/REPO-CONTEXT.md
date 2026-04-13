@@ -33,7 +33,7 @@
 3. **ai-bot** дергает **OpenClaw** и постит **outgoing** в тот же диалог.  
 4. **Chatwoot** шлёт вебхук **`message_created`** на **telegram-bridge** `/chatwoot/webhook` → bridge шлёт текст в Telegram. Задержки/очередь исходящих — логика в `bridge/src/server.js` (очередь на диске, повторы).
 
-При событии **`conversation_created`** (нужно включить в настройках Webhooks в Chatwoot) мост может отправить уведомление в **Telegram** и/или **HTTP POST** — переменные `BRIDGE_NEW_CONV_*` в `.env.example`.
+Уведомление о новом диалоге: **`conversation_created`** и/или первое входящее **`message_created`** (если в payload есть `messages_count === 1`) — переменные `BRIDGE_NEW_CONV_*` в `.env.example`.
 
 ## Коммиты без trailer IDE
 

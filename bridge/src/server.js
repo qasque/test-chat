@@ -49,6 +49,8 @@ const BRIDGE_NOTIFICATION_CHATWOOT_BASE_URL = (
 ).trim();
 
 const threadCreationLocks = new Map();
+/** Чтобы не дублировать уведомление, если пришли и conversation_created, и первое message_created. */
+const newConversationNotifyDedup = new Set();
 
 function requireSecret(req, res, next) {
   if (!BRIDGE_SECRET) return next();
@@ -254,10 +256,23 @@ async function notifyConversationCreated(body) {
   const text = buildNewConversationNotifyText(body);
   if (!text) {
     console.warn(
-      "[conversation_created] skip: no conversation in payload",
+      "[new_conv_notify] skip: no conversation in payload",
       body?.event
     );
     return;
+  }
+  const conv = body?.conversation || body;
+  const cid = conv?.id;
+  if (cid != null) {
+    const key = String(cid);
+    if (newConversationNotifyDedup.has(key)) {
+      console.log("[new_conv_notify] dedup skip conversation", key);
+      return;
+    }
+    newConversationNotifyDedup.add(key);
+    if (newConversationNotifyDedup.size > 3000) {
+      newConversationNotifyDedup.clear();
+    }
   }
   if (BRIDGE_NEW_CONV_HOOK_URL) {
     try {
@@ -268,7 +283,7 @@ async function notifyConversationCreated(body) {
         maxBodyLength: Infinity,
       });
     } catch (e) {
-      console.warn("[conversation_created] hook failed:", e.message);
+      console.warn("[new_conv_notify] hook failed:", e.message);
     }
   }
   if (BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN && BRIDGE_NEW_CONV_NOTIFY_CHAT_ID) {
@@ -279,7 +294,7 @@ async function notifyConversationCreated(body) {
         text
       );
     } catch (e) {
-      console.warn("[conversation_created] telegram failed:", e.message);
+      console.warn("[new_conv_notify] telegram failed:", e.message);
     }
   }
   if (
@@ -287,9 +302,27 @@ async function notifyConversationCreated(body) {
     (!BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN || !BRIDGE_NEW_CONV_NOTIFY_CHAT_ID)
   ) {
     console.log(
-      "[conversation_created] no BRIDGE_NEW_CONV_HOOK_URL / NOTIFY_* — уведомление не отправлено"
+      "[new_conv_notify] no BRIDGE_NEW_CONV_HOOK_URL / NOTIFY_* — уведомление не отправлено"
     );
   }
+}
+
+/** Первое входящее сообщение клиента (message_created), если в вебхуке нет conversation_created. */
+function isFirstIncomingMessageInConversation(message) {
+  if (!message || isOutgoingMessage(message)) return false;
+  if (message.private === true || message.content_attributes?.private) {
+    return false;
+  }
+  const c = message.conversation;
+  if (!c?.id) return false;
+  const count =
+    c.messages_count ??
+    c.meta?.messages_count ??
+    c.meta?.all_messages_count;
+  if (count == null || count === "") {
+    return false;
+  }
+  return Number(count) === 1;
 }
 
 /** Chatwoot soft-delete sets content_attributes.deleted (often message_updated, not message_deleted). */
@@ -675,6 +708,30 @@ app.post(
         return res.status(200).json({ ignored: true });
       }
 
+      if (message.private === true || message.content_attributes?.private) {
+        return res.status(200).json({ ignored: true });
+      }
+
+      if (
+        !isOutgoingMessage(message) &&
+        (BRIDGE_NEW_CONV_HOOK_URL ||
+          (BRIDGE_NEW_CONV_NOTIFY_BOT_TOKEN && BRIDGE_NEW_CONV_NOTIFY_CHAT_ID))
+      ) {
+        if (isFirstIncomingMessageInConversation(message)) {
+          try {
+            await notifyConversationCreated({
+              event: "conversation_created",
+              conversation: message.conversation,
+              contact:
+                message.sender || message.conversation?.meta?.sender,
+            });
+            console.log("[new_conv_notify] via message_created (first incoming)");
+          } catch (e) {
+            console.warn("[new_conv_notify] first incoming failed:", e.message);
+          }
+        }
+      }
+
       const conversationId =
         message.conversation?.id ?? message.conversation_id ?? req.body.conversation?.id;
       if (conversationId == null) {
@@ -688,10 +745,6 @@ app.post(
       if (!cfg?.token) {
         console.warn("Нет token для bot_key", thread.bot_key);
         return res.status(200).json({ skipped: true });
-      }
-
-      if (message.private === true || message.content_attributes?.private) {
-        return res.status(200).json({ ignored: true });
       }
 
       if (!isOutgoingMessage(message)) {
