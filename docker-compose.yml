@@ -12,6 +12,9 @@ x-chatwoot-app: &chatwoot-app
   build:
     context: ./chatwoot
     dockerfile: docker/Dockerfile
+    args:
+      # При OOM (SIGKILL на vite build) добавьте swap или задайте в .env меньший heap, см. .env.example
+      NODE_OPTIONS: "${CHATWOOT_BUILD_NODE_OPTIONS:---max-old-space-size=4096 --openssl-legacy-provider}"
   image: qasque-chatwoot:local
   env_file: .env
   volumes:

@@ -32,7 +32,15 @@ Chatwoot в этом стеке — исходники в папке chatwoot/ (
 «Зависание» на шаге ~27 (rake assets:precompile / Vite transforming):
   это нормально — самый тяжёлый этап. На слабом CPU/RAM ждите до часа. Смотреть прогресс:
  docker compose build --progress=plain rails
-  Не хватает памяти: добавьте swap или соберите образ на другой машине (scripts/build-chatwoot-image.ps1 + docker load).
+
+Ошибка: vite build … Command was killed with SIGKILL / ERR_PNPM … SIGKILL:
+  это почти всегда OOM (нехватка RAM при «rendering chunks»). Проверка: dmesg -T | grep -i 'killed process'
+  Решение 1 (лучшее на VPS): добавить swap, например 4G на Debian:
+   sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  Решение 2: в .env задать меньший heap и пересобрать:
+   CHATWOOT_BUILD_NODE_OPTIONS=--max-old-space-size=1536 --openssl-legacy-provider
+  Решение 3: собрать образ на мощной машине: scripts/build-chatwoot-image.ps1 + docker load на сервере.
 
 Если раньше использовали только GHCR: после git pull test-chat выполните ./scripts/clone-chatwoot.sh,
 затем docker compose build rails && docker compose build sidekiq && docker compose up -d rails sidekiq.
