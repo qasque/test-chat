@@ -126,6 +126,7 @@ services:
     environment:
       CHATWOOT_URL: http://rails:3000
       CHATWOOT_BOT_TOKEN: ${CHATWOOT_BOT_TOKEN:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw:18789}
       OPENCLAW_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_MODEL: ${OPENCLAW_MODEL:-openclaw/default}
