@@ -9,6 +9,11 @@
   padding-top: env(safe-area-inset-top, 0px);
 }
 
+/* Только Chatwoot (оператор): нижняя навигация портала скрыта — отступ не нужен */
+.app-shell--operator .app-content {
+  padding-bottom: 0;
+}
+
 .app-content {
   flex: 1;
   display: flex;

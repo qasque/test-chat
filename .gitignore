@@ -45,6 +45,7 @@ _cw_tmp/
 
 # Клон форка Chatwoot для сборки rails/sidekiq (см. docs/CHATWOOT-SOURCE.txt)
 chatwoot/
+!patches/chatwoot/
 
 # Локальные скрипты монорепо (Flutter), на сервер не нужны
 scripts/clean-flutter-artifacts.ps1

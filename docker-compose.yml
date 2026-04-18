@@ -111,6 +111,7 @@ services:
     env_file: .env
     environment:
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
+      PORTAL_UI_MODE: ${PORTAL_UI_MODE:-full}
     ports:
       - "127.0.0.1:18080:80"
     depends_on:

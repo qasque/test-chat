@@ -1,11 +1,28 @@
+export type PortalUiMode = "full" | "operator";
+
 declare global {
   interface Window {
     __APP_CONFIG__?: {
       CHATWOOT_URL?: string;
       CHATWOOT_ACCOUNT_ID?: string;
       CHATWOOT_NOTES_URL?: string;
+      /** `operator` — только встроенный Chatwoot (вход + диалоги), без вкладок портала. */
+      PORTAL_UI_MODE?: PortalUiMode | string;
     };
   }
+}
+
+/** Портал: полный (статус, настройка, …) или минимальный для оператора. */
+export function getPortalUiMode(): PortalUiMode {
+  const fromEnv = import.meta.env.VITE_PORTAL_UI_MODE;
+  if (fromEnv === "operator" || fromEnv === "full") return fromEnv;
+  const w =
+    typeof window !== "undefined"
+      ? window.__APP_CONFIG__?.PORTAL_UI_MODE
+      : undefined;
+  const s = w != null ? String(w).trim().toLowerCase() : "";
+  if (s === "operator" || s === "full") return s as PortalUiMode;
+  return "full";
 }
 
 export function getChatwootUrl(): string {

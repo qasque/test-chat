@@ -4,6 +4,7 @@ import ChatwootEmbed from "./ChatwootEmbed";
 import StatusTab from "./StatusTab";
 import BotSetup from "./BotSetup";
 import MoreTab from "./MoreTab";
+import { getPortalUiMode } from "./config";
 import "./App.css";
 
 const STORAGE_TAB = "portal.activeTab";
@@ -18,7 +19,10 @@ function readSavedTab(): TabId {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<TabId>(readSavedTab);
+  const operatorUi = getPortalUiMode() === "operator";
+  const [tab, setTab] = useState<TabId>(() =>
+    operatorUi ? "chats" : readSavedTab(),
+  );
 
   const changeTab = (id: TabId) => {
     setTab(id);
@@ -26,13 +30,13 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
-      <MobileNav active={tab} onChange={changeTab} />
+    <div className={`app-shell${operatorUi ? " app-shell--operator" : ""}`}>
+      {!operatorUi && <MobileNav active={tab} onChange={changeTab} />}
 
       <div className="app-content">
-        {tab === "chats" && <ChatwootEmbed />}
+        {(operatorUi || tab === "chats") && <ChatwootEmbed />}
 
-        {tab === "status" && (
+        {!operatorUi && tab === "status" && (
           <div className="scroll-container">
             <header className="tab-header">
               <h1>Статус системы</h1>
@@ -44,7 +48,7 @@ export default function App() {
           </div>
         )}
 
-        {tab === "setup" && (
+        {!operatorUi && tab === "setup" && (
           <div className="scroll-container">
             <header className="tab-header">
               <h1>Настройка</h1>
@@ -56,7 +60,7 @@ export default function App() {
           </div>
         )}
 
-        {tab === "more" && (
+        {!operatorUi && tab === "more" && (
           <div className="scroll-container">
             <header className="tab-header">
               <h1>Портал поддержки</h1>
