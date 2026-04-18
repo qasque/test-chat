@@ -8,6 +8,8 @@
 # Markdown excluded from remote (local copies remain)
 *.md
 !docs/REPO-CONTEXT.md
+!docs/CURSOR-AGENTS-CHAT-INDEX.md
+!docs/PRIVATE-REPO-SYNC.md
 
 dist-docker/
 
