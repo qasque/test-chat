@@ -856,6 +856,13 @@ app.post(
       if ((!content && attachments.length === 0) || conversationId == null) {
         return res.status(200).json({ ignored: true });
       }
+      const chatwootMessageId = Number(message.id);
+      if (
+        Number.isFinite(chatwootMessageId) &&
+        store.getByChatwootMessageId(chatwootMessageId)
+      ) {
+        return res.status(200).json({ ignored: true, reason: "already_synced" });
+      }
 
       try {
         let mediaSent = false;
@@ -878,7 +885,6 @@ app.post(
             sentTelegramMessageIds.push(sentId);
           }
         }
-        const chatwootMessageId = Number(message.id);
         if (Number.isFinite(chatwootMessageId)) {
           for (const telegramMessageId of sentTelegramMessageIds) {
             store.saveMessageLink({

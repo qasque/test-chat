@@ -3,6 +3,7 @@
 import os
 import logging
 import httpx
+import time
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +62,11 @@ VOICE_STT_FALLBACK_MESSAGE = (
     "Не удалось распознать голосовое сообщение. "
     "Пожалуйста, напишите ваш вопрос текстом."
 )
+# Optional: assign conversation to a specific operator on handoff.
+HANDOFF_ASSIGNEE_ID = int((os.environ.get("HANDOFF_ASSIGNEE_ID") or "0").strip() or 0)
+# Incoming webhook dedup (protect from repeated deliveries / retries).
+WEBHOOK_DEDUP_TTL_SEC = int((os.environ.get("WEBHOOK_DEDUP_TTL_SEC") or "180").strip() or 180)
+_processed_incoming: dict[str, float] = {}
 # Текст, который bridge/бот подставляет вместо транскрипта (см. telegram-demo-bot buildMediaPayload).
 _MIC_EMOJI = "🎤"
 _NOTE_EMOJI = "🎵"
@@ -169,11 +175,39 @@ async def handoff_to_human(account_id: int, conversation_id: int):
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status"
     await chatwoot_api("POST", path, {"status": "open"})
     conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+    patch_payload = {"custom_attributes": {AI_HANDOFF_ATTR: True}}
+    if HANDOFF_ASSIGNEE_ID > 0:
+        patch_payload["assignee_id"] = HANDOFF_ASSIGNEE_ID
     await chatwoot_api(
         "PATCH",
         conv_path,
-        {"custom_attributes": {AI_HANDOFF_ATTR: True}},
+        patch_payload,
     )
+
+
+def _incoming_dedup_key(payload: dict) -> str | None:
+    msg_id = payload.get("id") or payload.get("message", {}).get("id")
+    conv = payload.get("conversation") or {}
+    conv_id = conv.get("display_id") or conv.get("id") or payload.get("conversation_id")
+    account_id = payload.get("account", {}).get("id") or payload.get("account_id")
+    if not msg_id or not conv_id or not account_id:
+        return None
+    return f"{account_id}:{conv_id}:{msg_id}"
+
+
+def _is_duplicate_incoming(payload: dict) -> bool:
+    key = _incoming_dedup_key(payload)
+    if not key:
+        return False
+    now = time.time()
+    # Cleanup old entries.
+    expired = [k for k, ts in _processed_incoming.items() if now - ts > WEBHOOK_DEDUP_TTL_SEC]
+    for k in expired:
+        _processed_incoming.pop(k, None)
+    if key in _processed_incoming:
+        return True
+    _processed_incoming[key] = now
+    return False
 
 
 def _chat_completion_text(data: dict) -> str:
@@ -526,7 +560,7 @@ async def webhook(request: Request):
         return {"status": "bad request"}
 
     event = payload.get("event")
-    if event != "message_created":
+    if event not in ("message_created", "message_updated"):
         log.info("ignored: event=%s", event)
         return {"status": "ignored", "reason": f"event={event}"}
 
@@ -534,6 +568,10 @@ async def webhook(request: Request):
     if message_type != "incoming":
         log.info("ignored: message_type=%s", message_type)
         return {"status": "ignored", "reason": "not incoming"}
+
+    if _is_duplicate_incoming(payload):
+        log.info("ignored: duplicate incoming webhook")
+        return {"status": "ignored", "reason": "duplicate incoming"}
 
     content = payload.get("content", "").strip()
     att = _extract_audio_attachment(payload)
