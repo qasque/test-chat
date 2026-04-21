@@ -4,6 +4,7 @@ import os
 import logging
 import httpx
 import time
+from urllib.parse import urlencode
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
@@ -112,7 +113,7 @@ def _conversation_handed_off(conversation: dict) -> bool:
     return False
 
 
-def _resolve_system_prompt() -> tuple[str, str]:
+def _resolve_local_system_prompt() -> tuple[str, str]:
     """Возвращает (текст, источник: file|env|default)."""
     env_path = (os.environ.get("AI_BOT_SYSTEM_PROMPT_FILE") or "").strip()
     paths = []
@@ -136,6 +137,98 @@ def _resolve_system_prompt() -> tuple[str, str]:
     if raw:
         return raw.replace("\\n", "\n"), "env"
     return DEFAULT_AI_SYSTEM_PROMPT.strip(), "default"
+
+
+def _extract_inbox_and_source(payload: dict) -> tuple[int | None, str | None]:
+    conversation = payload.get("conversation") or {}
+    inbox_id = conversation.get("inbox_id")
+    if not inbox_id:
+        inbox = payload.get("inbox") or {}
+        inbox_id = inbox.get("id")
+    if not inbox_id:
+        inbox_id = payload.get("inbox_id")
+
+    source_id = None
+    contact_inbox = conversation.get("contact_inbox")
+    if isinstance(contact_inbox, dict):
+        raw_source = contact_inbox.get("source_id")
+        if isinstance(raw_source, str):
+            source_id = raw_source.strip() or None
+        elif raw_source is not None:
+            source_id = str(raw_source).strip() or None
+
+    try:
+        inbox_id = int(inbox_id) if inbox_id is not None else None
+    except Exception:
+        inbox_id = None
+
+    return inbox_id, source_id
+
+
+async def _resolve_chatwoot_prompt(
+    account_id: int,
+    inbox_id: int | None,
+    source_id: str | None,
+) -> tuple[str | None, str | None]:
+    """
+    Возвращает (prompt_text, source_tag) или (None, None), если промпт не найден.
+    source_tag: chatwoot_source|chatwoot_default
+    """
+    if not inbox_id:
+        return None, None
+
+    params = {}
+    if source_id:
+        params["source_id"] = source_id
+    query = f"?{urlencode(params)}" if params else ""
+    path = f"/api/v1/accounts/{account_id}/inboxes/{inbox_id}/traffic_source_prompts/current{query}"
+    url = f"{CHATWOOT_URL}{path}"
+    headers = {"api_access_token": BOT_TOKEN}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url, headers=headers)
+
+    if resp.status_code == 404:
+        return None, None
+    resp.raise_for_status()
+
+    data = resp.json() if resp.content else {}
+    prompt_text = (data.get("prompt_text") or "").strip()
+    if not prompt_text:
+        return None, None
+
+    resolved_source_id = data.get("source_id")
+    source_tag = "chatwoot_source" if resolved_source_id else "chatwoot_default"
+    return prompt_text, source_tag
+
+
+async def _resolve_system_prompt(
+    account_id: int | None = None,
+    inbox_id: int | None = None,
+    source_id: str | None = None,
+) -> tuple[str, str]:
+    """
+    Возвращает (текст, источник).
+    Приоритет: Chatwoot prompt (source/default) -> локальный file/env/default.
+    """
+    if account_id and inbox_id:
+        try:
+            prompt_text, source_tag = await _resolve_chatwoot_prompt(
+                account_id=account_id,
+                inbox_id=inbox_id,
+                source_id=source_id,
+            )
+            if prompt_text:
+                return prompt_text, source_tag or "chatwoot_default"
+        except Exception as e:
+            log.warning(
+                "chatwoot prompt lookup failed account=%s inbox=%s source=%s: %s",
+                account_id,
+                inbox_id,
+                source_id,
+                e,
+            )
+    return _resolve_local_system_prompt()
 
 
 def should_bot_handle(conversation: dict) -> bool:
@@ -237,8 +330,7 @@ def _chat_completion_text(data: dict) -> str:
     return (str(content) if content is not None else "").strip()
 
 
-async def ask_openclaw(session_id: str, message: str) -> str:
-    system_prompt, _ = _resolve_system_prompt()
+async def ask_openclaw(session_id: str, message: str, system_prompt: str) -> str:
     url = f"{OPENCLAW_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENCLAW_TOKEN}",
@@ -573,7 +665,8 @@ async def webhook(request: Request):
         log.info("ignored: duplicate incoming webhook")
         return {"status": "ignored", "reason": "duplicate incoming"}
 
-    content = payload.get("content", "").strip()
+    raw_content = payload.get("content")
+    content = raw_content.strip() if isinstance(raw_content, str) else ""
     att = _extract_audio_attachment(payload)
     # Пустой content или плейсхолдер от моста (см. telegram-demo-bot) + вложение → STT.
     if att and (not content or _is_voice_placeholder_content(content)):
@@ -610,6 +703,7 @@ async def webhook(request: Request):
     # Webhook push_data: display id is often under "id", not "display_id"
     conversation_id = conversation.get("display_id") or conversation.get("id")
     account_id = payload.get("account", {}).get("id")
+    inbox_id, source_id = _extract_inbox_and_source(payload)
 
     if not conversation_id or not account_id:
         log.warning("error: missing ids")
@@ -634,9 +728,22 @@ async def webhook(request: Request):
     )
 
     session_id = f"chatwoot-{account_id}-{conversation_id}"
+    system_prompt, prompt_source = await _resolve_system_prompt(
+        account_id=account_id,
+        inbox_id=inbox_id,
+        source_id=source_id,
+    )
+    log.info(
+        "prompt resolved conv=%s inbox=%s source_id=%s origin=%s chars=%s",
+        conversation_id,
+        inbox_id,
+        source_id,
+        prompt_source,
+        len(system_prompt),
+    )
 
     try:
-        ai_reply = await ask_openclaw(session_id, content)
+        ai_reply = await ask_openclaw(session_id, content, system_prompt)
     except Exception as e:
         log.error("OpenClaw error: %s", e)
         await send_reply(account_id, conversation_id, "Произошла ошибка, перевожу на оператора...")
@@ -689,7 +796,7 @@ async def health():
     except Exception:
         pass
 
-    prompt_text, src = _resolve_system_prompt()
+    prompt_text, src = await _resolve_system_prompt()
     return {
         "status": "ok",
         "openclaw_url": OPENCLAW_URL,
