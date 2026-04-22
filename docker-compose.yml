@@ -165,11 +165,25 @@ services:
       # Промпт: правьте ./config/ai-system-prompt.txt на хосте (смонтирован ниже). Пустой AI_BOT_SYSTEM_PROMPT в .env.
       AI_BOT_SYSTEM_PROMPT: ${AI_BOT_SYSTEM_PROMPT:-}
       AI_BOT_SYSTEM_PROMPT_FILE: /app/config/ai-system-prompt.txt
+      # Redis для кросс-воркерной дедупликации webhook. DB 4 чтобы не пересекаться
+      # с Chatwoot (использует 0/1/2/3). Если недоступен, ai-bot падает на in-memory.
+      REDIS_URL: ${AI_BOT_REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/4}
+    # Два воркера — безопасный старт под нагрузку. Под возрастающий RPS можно поднять до 4.
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5005"
+      - --workers
+      - "2"
     ports:
       - "127.0.0.1:5005:5005"
     depends_on:
       - rails
       - openclaw
+      - redis
     restart: always
 
 volumes:

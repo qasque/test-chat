@@ -7,13 +7,80 @@ import time
 import asyncio
 import json
 import re
+from contextlib import asynccontextmanager
 from urllib.parse import urlencode, urlparse, urlunparse
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ai-bot")
 
-app = FastAPI(title="Chatwoot-OpenClaw Bridge")
+
+# Shared HTTP client with keep-alive. httpx manages a per-host connection pool
+# internally, so one client is enough for Chatwoot, OpenClaw and every STT host.
+# We amortise the TLS/TCP handshake across all calls on the hot path.
+_http: httpx.AsyncClient | None = None
+
+# Optional Redis client for cross-worker webhook deduplication. Falls back to
+# the in-memory _processed_incoming dict when the URL is missing or Redis is
+# unreachable (single-worker is still safe that way).
+_redis = None
+
+
+REDIS_URL = (os.environ.get("REDIS_URL") or "").strip()
+
+
+async def _init_redis():
+    if not REDIS_URL:
+        return None
+    try:
+        import redis.asyncio as redis_asyncio
+    except Exception as e:
+        log.warning("redis lib missing (%s); dedup falls back to in-memory", e)
+        return None
+    try:
+        client = redis_asyncio.from_url(
+            REDIS_URL, decode_responses=True, socket_timeout=0.5, socket_connect_timeout=0.5
+        )
+        await client.ping()
+        log.info("redis dedup connected url=%s", _redis_url_for_log(REDIS_URL))
+        return client
+    except Exception as e:
+        log.warning("redis dedup unavailable (%s); using in-memory", e)
+        return None
+
+
+def _redis_url_for_log(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.hostname}:{parsed.port or ''}/{(parsed.path or '/').lstrip('/')}"
+    except Exception:
+        return "redis"
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    global _http, _redis
+    _http = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=30),
+        follow_redirects=True,
+    )
+    _redis = await _init_redis()
+    try:
+        yield
+    finally:
+        try:
+            await _http.aclose()
+        except Exception:
+            pass
+        if _redis is not None:
+            try:
+                await _redis.aclose()
+            except Exception:
+                pass
+
+
+app = FastAPI(title="Chatwoot-OpenClaw Bridge", lifespan=lifespan)
 
 CHATWOOT_URL = os.environ.get("CHATWOOT_URL", "http://rails:3000")
 BOT_TOKEN = os.environ.get("CHATWOOT_BOT_TOKEN", "")
@@ -321,8 +388,7 @@ async def _resolve_chatwoot_prompt(
     url = f"{CHATWOOT_URL}{path}"
     headers = {"api_access_token": BOT_TOKEN}
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url, headers=headers)
+    resp = await _http.get(url, headers=headers, timeout=10.0)
 
     if resp.status_code == 404:
         return None, None
@@ -382,18 +448,17 @@ def should_bot_handle(conversation: dict) -> bool:
     return True
 
 
-async def chatwoot_api(method: str, path: str, json_data: dict = None):
+async def chatwoot_api(method: str, path: str, json_data: dict = None, timeout: float = 10.0):
     url = f"{CHATWOOT_URL}{path}"
     headers = {"api_access_token": BOT_TOKEN, "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=30) as client:
-        if method == "POST":
-            resp = await client.post(url, json=json_data, headers=headers)
-        elif method == "PATCH":
-            resp = await client.patch(url, json=json_data, headers=headers)
-        else:
-            resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+    if method == "POST":
+        resp = await _http.post(url, json=json_data, headers=headers, timeout=timeout)
+    elif method == "PATCH":
+        resp = await _http.patch(url, json=json_data, headers=headers, timeout=timeout)
+    else:
+        resp = await _http.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -588,9 +653,8 @@ async def _classify_topic_with_openclaw(session_id: str, message: str, topics: l
         "stream": False,
         "user": f"{session_id}-topic",
     }
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        data = resp.json() if resp.content else {}
+    resp = await _http.post(url, json=payload, headers=headers, timeout=60.0)
+    data = resp.json() if resp.content else {}
     if resp.is_error:
         err = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
         raise RuntimeError(err or f"HTTP {resp.status_code}")
@@ -940,12 +1004,25 @@ def _incoming_dedup_key(payload: dict) -> str | None:
     return f"{account_id}:{conv_id}:{msg_id}"
 
 
-def _is_duplicate_incoming(payload: dict) -> bool:
+async def _is_duplicate_incoming(payload: dict) -> bool:
     key = _incoming_dedup_key(payload)
     if not key:
         return False
+    # Prefer Redis to keep dedup consistent across uvicorn workers. Graceful
+    # fallback to in-memory if Redis becomes unavailable mid-flight so that a
+    # Redis outage never breaks the AI pipeline.
+    if _redis is not None:
+        try:
+            ok = await _redis.set(
+                f"aibot:dedup:{key}",
+                "1",
+                nx=True,
+                ex=WEBHOOK_DEDUP_TTL_SEC,
+            )
+            return not bool(ok)
+        except Exception as e:
+            log.warning("redis dedup degraded: %s", e)
     now = time.time()
-    # Cleanup old entries.
     expired = [k for k, ts in _processed_incoming.items() if now - ts > WEBHOOK_DEDUP_TTL_SEC]
     for k in expired:
         _processed_incoming.pop(k, None)
@@ -1001,12 +1078,11 @@ async def ask_openclaw(session_id: str, message: str, system_prompt: str) -> str
         "user": session_id,
     }
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        try:
-            data = resp.json()
-        except Exception:
-            data = {}
+    resp = await _http.post(url, json=payload, headers=headers, timeout=120.0)
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
 
     if resp.is_error:
         err_obj = data.get("error") if isinstance(data, dict) else None
@@ -1108,34 +1184,36 @@ async def _download_attachment(att: dict) -> tuple[bytes, str, str]:
     candidates.append(url)
 
     last_error = None
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        for candidate in candidates:
-            for attempt in range(1, 7):
-                try:
-                    resp = await client.get(candidate, headers=headers)
-                    resp.raise_for_status()
-                    body = resp.content
-                    if not body:
-                        raise RuntimeError("audio attachment is empty")
-                    return body, _attachment_filename(att), _attachment_mime(att)
-                except Exception as e:
-                    last_error = e
-                    if "404" in str(e) and attempt < 6:
-                        log.warning(
-                            "audio not ready yet url=%s attempt=%s err=%s",
-                            candidate,
-                            attempt,
-                            e,
-                        )
-                        await asyncio.sleep(0.8)
-                        continue
+    # Active Storage usually uploads within <1s; more aggressive retries just
+    # stall the hot path. 3x0.4s gives the blob ~1.2s to materialise, then we
+    # bail out and let the caller deliver a fallback message.
+    for candidate in candidates:
+        for attempt in range(1, 4):
+            try:
+                resp = await _http.get(candidate, headers=headers, timeout=60.0)
+                resp.raise_for_status()
+                body = resp.content
+                if not body:
+                    raise RuntimeError("audio attachment is empty")
+                return body, _attachment_filename(att), _attachment_mime(att)
+            except Exception as e:
+                last_error = e
+                if "404" in str(e) and attempt < 3:
                     log.warning(
-                        "audio download failed url=%s attempt=%s err=%s",
+                        "audio not ready yet url=%s attempt=%s err=%s",
                         candidate,
                         attempt,
                         e,
                     )
-                    break
+                    await asyncio.sleep(0.4)
+                    continue
+                log.warning(
+                    "audio download failed url=%s attempt=%s err=%s",
+                    candidate,
+                    attempt,
+                    e,
+                )
+                break
 
     raise RuntimeError(f"audio attachment download failed: {last_error}")
 
@@ -1160,8 +1238,7 @@ async def transcribe_audio_with_openclaw(
     if OPENCLAW_STT_LANGUAGE:
         data["language"] = OPENCLAW_STT_LANGUAGE
     files = {"file": (file_name, audio_bytes, mime_type)}
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, headers=headers, data=data, files=files)
+    resp = await _http.post(url, headers=headers, data=data, files=files, timeout=120.0)
     if resp.is_error:
         raise RuntimeError(
             f"OpenClaw STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
@@ -1188,8 +1265,7 @@ async def transcribe_audio_with_groq(
     if OPENCLAW_STT_LANGUAGE:
         data["language"] = OPENCLAW_STT_LANGUAGE
     files = {"file": (file_name, audio_bytes, mime_type)}
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(GROQ_STT_URL, headers=headers, data=data, files=files)
+    resp = await _http.post(GROQ_STT_URL, headers=headers, data=data, files=files, timeout=120.0)
     if resp.is_error:
         raise RuntimeError(
             f"Groq STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
@@ -1223,8 +1299,7 @@ async def transcribe_audio_via_groq_relay(
     if OPENCLAW_STT_LANGUAGE:
         data["language"] = OPENCLAW_STT_LANGUAGE
     files = {"file": (file_name, audio_bytes, mime_type)}
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, headers=headers, data=data, files=files)
+    resp = await _http.post(url, headers=headers, data=data, files=files, timeout=120.0)
     if resp.is_error:
         raise RuntimeError(
             f"Groq relay STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
@@ -1251,8 +1326,7 @@ async def transcribe_audio_with_openai(
     if OPENCLAW_STT_LANGUAGE:
         data["language"] = OPENCLAW_STT_LANGUAGE
     files = {"file": (file_name, audio_bytes, mime_type)}
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(OPENAI_STT_URL, headers=headers, data=data, files=files)
+    resp = await _http.post(OPENAI_STT_URL, headers=headers, data=data, files=files, timeout=120.0)
     if resp.is_error:
         raise RuntimeError(
             f"OpenAI STT HTTP {resp.status_code}: {(resp.text or '')[:500]}"
@@ -1384,7 +1458,7 @@ async def webhook(request: Request):
         log.info("ignored: message_type=%s", message_type)
         return {"status": "ignored", "reason": "not incoming"}
 
-    if _is_duplicate_incoming(payload):
+    if await _is_duplicate_incoming(payload):
         log.info("ignored: duplicate incoming webhook")
         return {"status": "ignored", "reason": "duplicate incoming"}
 
@@ -1433,13 +1507,9 @@ async def webhook(request: Request):
         return {"status": "error", "reason": "missing ids"}
 
     session_id = f"chatwoot-{account_id}-{conversation_id}"
-    await _classify_first_message_topic(
-        account_id=account_id,
-        conversation_id=conversation_id,
-        session_id=session_id,
-        content=content,
-    )
 
+    # Gate the bot FIRST. On manual takeover / handoff / bad status we must
+    # neither classify nor park — both cost extra RTT to Chatwoot/OpenClaw.
     if not should_bot_handle(conversation):
         log.info(
             "ignored: status=%s ai_handoff=%s",
@@ -1458,15 +1528,28 @@ async def webhook(request: Request):
         content[:80],
     )
 
-    # Hide this conversation from operators' default views while the AI owns it.
-    # `handoff_to_human` will flip it back to open when the bot decides to escalate.
-    await park_conversation_for_ai(account_id, conversation_id, conversation)
+    t_start = time.perf_counter()
 
-    system_prompt, prompt_source = await _resolve_system_prompt(
-        account_id=account_id,
-        inbox_id=inbox_id,
-        source_id=source_id,
-    )
+    # Parking and prompt lookup are independent Chatwoot calls; run them
+    # concurrently to replace ~3 sequential RTT with max(park, prompt).
+    async def _do_park():
+        try:
+            await park_conversation_for_ai(account_id, conversation_id, conversation)
+        except Exception as e:
+            log.warning("park failed conv=%s err=%s", conversation_id, e)
+
+    async def _do_prompt():
+        return await _resolve_system_prompt(
+            account_id=account_id,
+            inbox_id=inbox_id,
+            source_id=source_id,
+        )
+
+    t_before_parallel = time.perf_counter()
+    _, prompt_result = await asyncio.gather(_do_park(), _do_prompt())
+    system_prompt, prompt_source = prompt_result
+    t_after_parallel = time.perf_counter()
+
     log.info(
         "prompt resolved conv=%s inbox=%s source_id=%s origin=%s chars=%s",
         conversation_id,
@@ -1476,6 +1559,7 @@ async def webhook(request: Request):
         len(system_prompt),
     )
 
+    t_before_llm = time.perf_counter()
     try:
         ai_reply = await ask_openclaw(session_id, content, system_prompt)
     except Exception as e:
@@ -1483,6 +1567,7 @@ async def webhook(request: Request):
         await send_reply(account_id, conversation_id, "Произошла ошибка, перевожу на оператора...")
         await handoff_to_human(account_id, conversation_id)
         return {"status": "error", "reason": str(e)}
+    t_after_llm = time.perf_counter()
 
     if not (ai_reply or "").strip():
         log.warning("OpenClaw empty reply conv=%s", conversation_id)
@@ -1507,6 +1592,7 @@ async def webhook(request: Request):
 
     needs_handoff = explicit_handoff or inferred_handoff
 
+    t_before_send = time.perf_counter()
     if needs_handoff:
         if clean_reply:
             await send_reply(account_id, conversation_id, clean_reply)
@@ -1524,6 +1610,28 @@ async def webhook(request: Request):
         )
     else:
         await send_reply(account_id, conversation_id, ai_reply)
+    t_after_send = time.perf_counter()
+
+    # Topic classification is report metadata — the user must not wait for it.
+    # If the task crashes, support_topic_id stays null and the next meaningful
+    # message will re-trigger classification naturally.
+    asyncio.create_task(
+        _classify_first_message_topic(
+            account_id=account_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            content=content,
+        )
+    )
+
+    log.info(
+        "hot_path conv=%s t_parallel=%.3f t_llm=%.3f t_send=%.3f total=%.3f",
+        conversation_id,
+        t_after_parallel - t_before_parallel,
+        t_after_llm - t_before_llm,
+        t_after_send - t_before_send,
+        t_after_send - t_start,
+    )
 
     return {"status": "ok", "handoff": needs_handoff}
 
@@ -1533,19 +1641,19 @@ async def health():
     openclaw_ok = False
     openclaw_chat_api = False
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{OPENCLAW_URL}/health")
-            openclaw_ok = resp.status_code == 200
-            if OPENCLAW_TOKEN:
-                r2 = await client.get(
-                    f"{OPENCLAW_URL}/v1/models",
-                    headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
-                )
-                body = r2.text if r2.status_code == 200 else ""
-                ct = (r2.headers.get("content-type") or "").lower()
-                openclaw_chat_api = r2.status_code == 200 and (
-                    "application/json" in ct or _looks_like_openclaw_models_json(body)
-                )
+        resp = await _http.get(f"{OPENCLAW_URL}/health", timeout=5.0)
+        openclaw_ok = resp.status_code == 200
+        if OPENCLAW_TOKEN:
+            r2 = await _http.get(
+                f"{OPENCLAW_URL}/v1/models",
+                headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
+                timeout=5.0,
+            )
+            body = r2.text if r2.status_code == 200 else ""
+            ct = (r2.headers.get("content-type") or "").lower()
+            openclaw_chat_api = r2.status_code == 200 and (
+                "application/json" in ct or _looks_like_openclaw_models_json(body)
+            )
     except Exception:
         pass
 
