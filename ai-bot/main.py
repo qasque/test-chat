@@ -4,7 +4,8 @@ import os
 import logging
 import httpx
 import time
-from urllib.parse import urlencode
+import asyncio
+from urllib.parse import urlencode, urlparse, urlunparse
 from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
@@ -431,20 +432,66 @@ def _attachment_mime(att: dict) -> str:
     return "audio/ogg"
 
 
+def _rewrite_to_internal_chatwoot(url: str) -> str | None:
+    if not isinstance(url, str) or not url:
+        return None
+    parsed = urlparse(url)
+    base = urlparse(CHATWOOT_URL)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    if not base.scheme or not base.netloc:
+        return None
+    if not parsed.path.startswith("/rails/active_storage/"):
+        return None
+    return urlunparse((base.scheme, base.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+
 async def _download_attachment(att: dict) -> tuple[bytes, str, str]:
     url = _attachment_url(att)
     if not url:
         raise RuntimeError("audio attachment URL missing")
+
     headers = {}
     if BOT_TOKEN:
         headers["api_access_token"] = BOT_TOKEN
+
+    candidates = []
+    internal_url = _rewrite_to_internal_chatwoot(url)
+    if internal_url and internal_url != url:
+        candidates.append(internal_url)
+    candidates.append(url)
+
+    last_error = None
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
-        body = resp.content
-    if not body:
-        raise RuntimeError("audio attachment is empty")
-    return body, _attachment_filename(att), _attachment_mime(att)
+        for candidate in candidates:
+            for attempt in range(1, 7):
+                try:
+                    resp = await client.get(candidate, headers=headers)
+                    resp.raise_for_status()
+                    body = resp.content
+                    if not body:
+                        raise RuntimeError("audio attachment is empty")
+                    return body, _attachment_filename(att), _attachment_mime(att)
+                except Exception as e:
+                    last_error = e
+                    if "404" in str(e) and attempt < 6:
+                        log.warning(
+                            "audio not ready yet url=%s attempt=%s err=%s",
+                            candidate,
+                            attempt,
+                            e,
+                        )
+                        await asyncio.sleep(0.8)
+                        continue
+                    log.warning(
+                        "audio download failed url=%s attempt=%s err=%s",
+                        candidate,
+                        attempt,
+                        e,
+                    )
+                    break
+
+    raise RuntimeError(f"audio attachment download failed: {last_error}")
 
 
 async def transcribe_audio_with_openclaw(
