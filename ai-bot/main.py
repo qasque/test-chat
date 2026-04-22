@@ -68,6 +68,14 @@ VOICE_STT_FALLBACK_MESSAGE = (
 )
 # Optional: assign conversation to a specific operator on handoff.
 HANDOFF_ASSIGNEE_ID = int((os.environ.get("HANDOFF_ASSIGNEE_ID") or "0").strip() or 0)
+# Park AI-handled conversations in status=pending and unassigned so operators
+# don't see them in their default views until the bot hands off to a human.
+PARK_AI_CONVERSATIONS = (os.environ.get("PARK_AI_CONVERSATIONS") or "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 # Incoming webhook dedup (protect from repeated deliveries / retries).
 WEBHOOK_DEDUP_TTL_SEC = int((os.environ.get("WEBHOOK_DEDUP_TTL_SEC") or "180").strip() or 180)
 _processed_incoming: dict[str, float] = {}
@@ -520,35 +528,137 @@ async def send_reply(account_id: int, conversation_id: int, message: str):
     })
 
 
-async def handoff_to_human(account_id: int, conversation_id: int):
-    path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status"
-    await chatwoot_api("POST", path, {"status": "open"})
-    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
-    patch_payload = {"custom_attributes": {AI_HANDOFF_ATTR: True}}
-    if HANDOFF_ASSIGNEE_ID > 0:
-        patch_payload["assignee_id"] = HANDOFF_ASSIGNEE_ID
+def _conversation_assignee_id(conversation: dict) -> int | None:
+    if not isinstance(conversation, dict):
+        return None
+    meta = conversation.get("meta") or {}
+    assignee = meta.get("assignee") if isinstance(meta, dict) else None
+    if isinstance(assignee, dict) and assignee.get("id"):
+        try:
+            return int(assignee["id"])
+        except Exception:
+            return None
+    raw = conversation.get("assignee_id")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
+async def _set_conversation_status(account_id: int, conversation_id: int, status: str):
     await chatwoot_api(
-        "PATCH",
-        conv_path,
-        patch_payload,
+        "POST",
+        f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status",
+        {"status": status},
     )
 
 
-async def mark_manual_takeover(account_id: int, conversation_id: int):
-    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+async def _set_conversation_custom_attributes(
+    account_id: int, conversation_id: int, attrs: dict
+):
+    # Chatwoot has a dedicated endpoint for updating conversation custom_attributes;
+    # plain PATCH /conversations/:id only permits :priority.
     await chatwoot_api(
-        "PATCH",
-        conv_path,
-        {"custom_attributes": {AI_HANDOFF_ATTR: True}},
+        "POST",
+        f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/custom_attributes",
+        {"custom_attributes": attrs},
+    )
+
+
+async def _assign_conversation(
+    account_id: int, conversation_id: int, assignee_id: int | None
+):
+    payload: dict = {"assignee_id": assignee_id}
+    await chatwoot_api(
+        "POST",
+        f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments",
+        payload,
+    )
+
+
+async def park_conversation_for_ai(
+    account_id: int,
+    conversation_id: int,
+    conversation: dict | None = None,
+):
+    """Hide AI-handled conversation from operators.
+
+    Chatwoot's `pending` status keeps the conversation out of the default
+    operator views (only the explicit Pending filter shows it), and
+    clearing the assignee avoids landing in anybody's `Mine` list.
+    """
+    if not PARK_AI_CONVERSATIONS:
+        return
+
+    current_status = (conversation or {}).get("status")
+    current_assignee = _conversation_assignee_id(conversation or {})
+    # Already parked — nothing to do.
+    if current_status == "pending" and current_assignee is None:
+        return
+
+    try:
+        if current_status != "pending":
+            await _set_conversation_status(account_id, conversation_id, "pending")
+        if current_assignee is not None:
+            await _assign_conversation(account_id, conversation_id, None)
+        log.info(
+            "conv parked for AI conv=%s prev_status=%s prev_assignee=%s",
+            conversation_id,
+            current_status,
+            current_assignee,
+        )
+    except Exception as e:
+        log.warning("failed to park conv=%s for AI: %s", conversation_id, e)
+
+
+async def handoff_to_human(account_id: int, conversation_id: int):
+    # 1) Make the conversation visible to operators again.
+    try:
+        await _set_conversation_status(account_id, conversation_id, "open")
+    except Exception as e:
+        log.warning("handoff: failed to set status=open conv=%s err=%s", conversation_id, e)
+
+    # 2) Mark the AI as disengaged for this conversation.
+    try:
+        await _set_conversation_custom_attributes(
+            account_id, conversation_id, {AI_HANDOFF_ATTR: True}
+        )
+    except Exception as e:
+        log.warning("handoff: failed to set ai_handoff=true conv=%s err=%s", conversation_id, e)
+
+    # 3) Optionally route to a specific operator.
+    if HANDOFF_ASSIGNEE_ID > 0:
+        try:
+            await _assign_conversation(account_id, conversation_id, HANDOFF_ASSIGNEE_ID)
+        except Exception as e:
+            log.warning(
+                "handoff: failed to assign conv=%s assignee_id=%s err=%s",
+                conversation_id,
+                HANDOFF_ASSIGNEE_ID,
+                e,
+            )
+
+
+async def mark_manual_takeover(account_id: int, conversation_id: int):
+    # Operator is taking over — make the conversation visible in their default views.
+    try:
+        await _set_conversation_status(account_id, conversation_id, "open")
+    except Exception as e:
+        log.warning(
+            "manual takeover: failed to set status=open conv=%s err=%s",
+            conversation_id,
+            e,
+        )
+    await _set_conversation_custom_attributes(
+        account_id, conversation_id, {AI_HANDOFF_ATTR: True}
     )
 
 
 async def clear_manual_takeover(account_id: int, conversation_id: int):
-    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
-    await chatwoot_api(
-        "PATCH",
-        conv_path,
-        {"custom_attributes": {AI_HANDOFF_ATTR: False}},
+    await _set_conversation_custom_attributes(
+        account_id, conversation_id, {AI_HANDOFF_ATTR: False}
     )
 
 
@@ -667,6 +777,8 @@ async def _resume_ai_on_last_incoming_if_needed(payload: dict):
     if not (ai_reply or "").strip():
         log.warning("manual resume empty reply conv=%s", conversation_id)
         return
+    # AI resumes ownership of the dialog — hide it from operators again.
+    await park_conversation_for_ai(account_id, conversation_id, conversation)
     await send_reply(account_id, conversation_id, ai_reply)
     log.info(
         "manual takeover disabled conv=%s auto-resumed on last incoming msg_id=%s prompt_origin=%s",
@@ -1203,6 +1315,10 @@ async def webhook(request: Request):
         conversation.get("status"),
         content[:80],
     )
+
+    # Hide this conversation from operators' default views while the AI owns it.
+    # `handoff_to_human` will flip it back to open when the bot decides to escalate.
+    await park_conversation_for_ai(account_id, conversation_id, conversation)
 
     system_prompt, prompt_source = await _resolve_system_prompt(
         account_id=account_id,
