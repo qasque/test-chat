@@ -794,23 +794,26 @@ async def park_conversation_for_ai(
     Chatwoot's `pending` status keeps the conversation out of the default
     operator views (only the explicit Pending filter shows it), and
     clearing the assignee avoids landing in anybody's `Mine` list.
+
+    The `conversation` object on the incoming webhook is only a *snapshot* at
+    emit time. Auto-assignment (or API/WebWidget timing) can assign an operator
+    *after* the snapshot while the row still has assignee_id=None in the
+    payload—so we must always POST unassign, not only when the snapshot shows
+    an assignee. The assignments endpoint clears a human or agent_bot
+    assignee; idempotent if already unassigned.
     """
     if not PARK_AI_CONVERSATIONS:
         return
 
     current_status = (conversation or {}).get("status")
     current_assignee = _conversation_assignee_id(conversation or {})
-    # Already parked — nothing to do.
-    if current_status == "pending" and current_assignee is None:
-        return
 
     try:
         if current_status != "pending":
             await _set_conversation_status(account_id, conversation_id, "pending")
-        if current_assignee is not None:
-            await _assign_conversation(account_id, conversation_id, None)
+        await _assign_conversation(account_id, conversation_id, None)
         log.info(
-            "conv parked for AI conv=%s prev_status=%s prev_assignee=%s",
+            "conv parked for AI conv=%s payload_status=%s payload_assignee=%s",
             conversation_id,
             current_status,
             current_assignee,
