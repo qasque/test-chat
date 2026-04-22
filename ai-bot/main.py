@@ -5,6 +5,8 @@ import logging
 import httpx
 import time
 import asyncio
+import json
+import re
 from urllib.parse import urlencode, urlparse, urlunparse
 from fastapi import FastAPI, Request
 
@@ -83,6 +85,106 @@ _VOICE_PLACEHOLDER_CF = frozenset(
         f"{_NOTE_EMOJI} аудио",
     }
 )
+
+# Ручной перехват оператора:
+# - ENABLE: бот перестаёт отвечать в этом диалоге (ставим ai_handoff=true)
+# - DISABLE: снимаем ai_handoff и, при необходимости, бот догоняет последнее входящее
+MANUAL_TAKEOVER_ENABLE_MARKERS = tuple(
+    x.strip().lower()
+    for x in (os.environ.get("MANUAL_TAKEOVER_ENABLE_MARKERS") or "массовые сбои").split("|")
+    if x.strip()
+)
+MANUAL_TAKEOVER_DISABLE_MARKERS = tuple(
+    x.strip().lower()
+    for x in (
+        os.environ.get("MANUAL_TAKEOVER_DISABLE_MARKERS")
+        or "отключили массовые сбои|массовые сбои отключены|сбои устранены"
+    ).split("|")
+    if x.strip()
+)
+
+NON_MEANINGFUL_GREETING_MESSAGES = frozenset(
+    {
+        "привет",
+        "здравствуйте",
+        "добрый день",
+        "добрый вечер",
+        "доброго дня",
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }
+)
+NON_MEANINGFUL_GREETING_TOKENS = frozenset(
+    {
+        "привет",
+        "здравствуй",
+        "здравствуйте",
+        "добрый",
+        "доброго",
+        "день",
+        "вечер",
+        "утро",
+        "hello",
+        "hi",
+        "hey",
+        "good",
+        "morning",
+        "afternoon",
+        "evening",
+    }
+)
+MEANINGFUL_TOPIC_HINTS = (
+    "vpn",
+    "впн",
+    "не работает",
+    "не подключ",
+    "ошибка",
+    "проблем",
+    "медлен",
+    "скорост",
+    "тормоз",
+    "отмен",
+    "автопрод",
+    "подписк",
+    "возврат",
+    "вернут",
+    "деньг",
+    "оплат",
+)
+MIN_MEANINGFUL_TEXT_LEN = int((os.environ.get("MIN_MEANINGFUL_TEXT_LEN") or "10").strip() or 10)
+
+
+def _normalize_for_topic_filter(text: str) -> str:
+    lowered = (text or "").lower().strip()
+    if not lowered:
+        return ""
+    lowered = re.sub(r"[^\w\s]", " ", lowered, flags=re.UNICODE)
+    return " ".join(lowered.split())
+
+
+def is_meaningful_client_message(content: str) -> bool:
+    normalized = _normalize_for_topic_filter(content)
+    if not normalized:
+        return False
+    if normalized in NON_MEANINGFUL_GREETING_MESSAGES:
+        return False
+
+    tokens = normalized.split()
+    if tokens and all(token in NON_MEANINGFUL_GREETING_TOKENS for token in tokens):
+        return False
+
+    if any(hint in normalized for hint in MEANINGFUL_TOPIC_HINTS):
+        return True
+
+    if len(normalized) < MIN_MEANINGFUL_TEXT_LEN and len(tokens) <= 2:
+        return False
+    if len(tokens) == 1 and len(normalized) < (MIN_MEANINGFUL_TEXT_LEN + 4):
+        return False
+    return True
 
 
 def _is_voice_placeholder_content(content: str) -> bool:
@@ -261,6 +363,154 @@ async def chatwoot_api(method: str, path: str, json_data: dict = None):
         return resp.json()
 
 
+def _extract_json_object(text: str) -> dict | None:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+async def _fetch_topic_context(account_id: int, conversation_id: int) -> dict | None:
+    path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/topic_classification"
+    try:
+        data = await chatwoot_api("GET", path)
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        log.warning("topic context fetch failed conv=%s err=%s", conversation_id, e)
+        return None
+
+
+async def _assign_topic(
+    account_id: int,
+    conversation_id: int,
+    existing_topic_id: int | None = None,
+    topic_name: str | None = None,
+):
+    path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/topic_classification"
+    payload: dict = {}
+    if existing_topic_id:
+        payload["existing_topic_id"] = existing_topic_id
+    if topic_name:
+        payload["topic_name"] = topic_name
+    if not payload:
+        return
+    await chatwoot_api("POST", path, payload)
+
+
+async def _classify_topic_with_openclaw(session_id: str, message: str, topics: list[dict]) -> tuple[int | None, str | None]:
+    url = f"{OPENCLAW_URL}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+        "Content-Type": "application/json",
+        "x-openclaw-session-key": f"{session_id}-topic",
+        "x-openclaw-message-channel": OPENCLAW_MESSAGE_CHANNEL,
+    }
+    topic_lines = []
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        tid = topic.get("id")
+        name = str(topic.get("name") or "").strip()
+        if tid and name:
+            topic_lines.append(f"{tid}: {name}")
+    known_topics = "\n".join(topic_lines) if topic_lines else "Список пуст."
+
+    system_prompt = (
+        "Ты классифицируешь обращение в категорию поддержки. "
+        "Верни строго JSON без markdown: "
+        '{"existing_topic_id": <id|null>, "new_topic_name": "<короткая_категория_или_null>"}. '
+        "Если есть близкая категория в списке — используй existing_topic_id. "
+        "Если нет подходящей — existing_topic_id=null и задай короткое new_topic_name."
+    )
+    user_prompt = (
+        f"Сообщение пользователя:\n{message}\n\n"
+        f"Существующие категории:\n{known_topics}\n"
+    )
+    payload = {
+        "model": OPENCLAW_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "user": f"{session_id}-topic",
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        data = resp.json() if resp.content else {}
+    if resp.is_error:
+        err = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
+        raise RuntimeError(err or f"HTTP {resp.status_code}")
+    text = _chat_completion_text(data)
+    parsed = _extract_json_object(text) or {}
+    existing_id = parsed.get("existing_topic_id")
+    new_topic_name = (parsed.get("new_topic_name") or "").strip()
+    try:
+        existing_id = int(existing_id) if existing_id is not None else None
+    except Exception:
+        existing_id = None
+    if not existing_id and not new_topic_name:
+        return None, None
+    return existing_id, new_topic_name or None
+
+
+async def _classify_first_message_topic(
+    account_id: int,
+    conversation_id: int,
+    session_id: str,
+    content: str,
+):
+    context = await _fetch_topic_context(account_id, conversation_id)
+    if not context:
+        return
+
+    current_topic = context.get("support_topic")
+    if isinstance(current_topic, dict) and current_topic.get("id"):
+        return
+
+    if not is_meaningful_client_message(content):
+        log.info(
+            "classification_skipped_non_meaningful conv=%s text='%s'",
+            conversation_id,
+            (content or "")[:80],
+        )
+        return
+
+    topics = context.get("topics") if isinstance(context.get("topics"), list) else []
+    try:
+        existing_topic_id, topic_name = await _classify_topic_with_openclaw(session_id, content, topics)
+        if not existing_topic_id and not topic_name:
+            log.warning("topic classification empty conv=%s", conversation_id)
+            return
+        await _assign_topic(
+            account_id=account_id,
+            conversation_id=conversation_id,
+            existing_topic_id=existing_topic_id,
+            topic_name=topic_name,
+        )
+        log.info(
+            "topic classified conv=%s existing_topic_id=%s topic_name=%s",
+            conversation_id,
+            existing_topic_id,
+            topic_name,
+        )
+    except Exception as e:
+        # No retries by design: log and continue normal bot flow.
+        log.warning("topic classification failed conv=%s err=%s", conversation_id, e)
+
+
 async def send_reply(account_id: int, conversation_id: int, message: str):
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
     await chatwoot_api("POST", path, {
@@ -281,6 +531,148 @@ async def handoff_to_human(account_id: int, conversation_id: int):
         "PATCH",
         conv_path,
         patch_payload,
+    )
+
+
+async def mark_manual_takeover(account_id: int, conversation_id: int):
+    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+    await chatwoot_api(
+        "PATCH",
+        conv_path,
+        {"custom_attributes": {AI_HANDOFF_ATTR: True}},
+    )
+
+
+async def clear_manual_takeover(account_id: int, conversation_id: int):
+    conv_path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+    await chatwoot_api(
+        "PATCH",
+        conv_path,
+        {"custom_attributes": {AI_HANDOFF_ATTR: False}},
+    )
+
+
+def _payload_content(payload: dict) -> str:
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return ""
+    return content.strip()
+
+
+def _contains_any_marker(text: str, markers: tuple[str, ...]) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def _is_human_outgoing_payload(payload: dict) -> bool:
+    if payload.get("message_type") != "outgoing":
+        return False
+
+    sender = payload.get("sender") or {}
+    sender_type = str(sender.get("type") or payload.get("sender_type") or "").lower()
+    # Ручной перехват только от живого оператора/агента, не от agent_bot.
+    if sender_type in {"agentbot", "agent_bot"}:
+        return False
+    return True
+
+
+def _manual_takeover_action(payload: dict) -> str | None:
+    if not _is_human_outgoing_payload(payload):
+        return None
+
+    text = _payload_content(payload)
+    if not text:
+        return None
+    if _contains_any_marker(text, MANUAL_TAKEOVER_DISABLE_MARKERS):
+        return "disable"
+    if _contains_any_marker(text, MANUAL_TAKEOVER_ENABLE_MARKERS):
+        return "enable"
+    return None
+
+
+def _is_human_reply_message(msg: dict, control_msg_id: int | None = None) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("message_type") != 1:
+        return False
+    if msg.get("private") is True:
+        return False
+    if control_msg_id and msg.get("id") == control_msg_id:
+        return False
+    sender = msg.get("sender") or {}
+    sender_type = str(sender.get("type") or "").lower()
+    if sender_type in {"agent_bot", "agentbot"}:
+        return False
+    # Учитываем только реальные ответы оператора, не контрольные маркеры.
+    content = (msg.get("content") or "").strip()
+    if _contains_any_marker(content, MANUAL_TAKEOVER_ENABLE_MARKERS) or _contains_any_marker(content, MANUAL_TAKEOVER_DISABLE_MARKERS):
+        return False
+    return bool(content)
+
+
+def _latest_incoming_message(messages: list[dict]) -> dict | None:
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("message_type") != 0:
+            continue
+        content = (msg.get("content") or "").strip()
+        if content:
+            return msg
+    return None
+
+
+async def _conversation_messages(account_id: int, conversation_id: int) -> list[dict]:
+    path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
+    data = await chatwoot_api("GET", path)
+    payload = data.get("payload") if isinstance(data, dict) else None
+    if not isinstance(payload, list):
+        return []
+    # Newest first in Chatwoot API.
+    return payload
+
+
+async def _resume_ai_on_last_incoming_if_needed(payload: dict):
+    conversation = payload.get("conversation", {})
+    conversation_id = conversation.get("display_id") or conversation.get("id")
+    account_id = payload.get("account", {}).get("id")
+    if not conversation_id or not account_id:
+        return
+
+    messages = await _conversation_messages(account_id, conversation_id)
+    control_msg_id = payload.get("id")
+    if any(_is_human_reply_message(msg, control_msg_id=control_msg_id) for msg in messages):
+        log.info("manual takeover disabled conv=%s but operator replies exist; skip auto-resume", conversation_id)
+        return
+
+    last_incoming = _latest_incoming_message(messages)
+    if not last_incoming:
+        log.info("manual takeover disabled conv=%s no incoming content to resume", conversation_id)
+        return
+
+    incoming_content = (last_incoming.get("content") or "").strip()
+    if not incoming_content:
+        return
+
+    inbox_id, source_id = _extract_inbox_and_source(payload)
+    system_prompt, prompt_source = await _resolve_system_prompt(
+        account_id=account_id,
+        inbox_id=inbox_id,
+        source_id=source_id,
+    )
+    session_id = f"chatwoot-{account_id}-{conversation_id}"
+    ai_reply = await ask_openclaw(session_id, incoming_content, system_prompt)
+    if not (ai_reply or "").strip():
+        log.warning("manual resume empty reply conv=%s", conversation_id)
+        return
+    await send_reply(account_id, conversation_id, ai_reply)
+    log.info(
+        "manual takeover disabled conv=%s auto-resumed on last incoming msg_id=%s prompt_origin=%s",
+        conversation_id,
+        last_incoming.get("id"),
+        prompt_source,
     )
 
 
@@ -709,6 +1101,31 @@ async def webhook(request: Request):
         return {"status": "ignored", "reason": f"event={event}"}
 
     message_type = payload.get("message_type")
+    action = _manual_takeover_action(payload)
+    if action == "enable":
+        conversation = payload.get("conversation", {})
+        conversation_id = conversation.get("display_id") or conversation.get("id")
+        account_id = payload.get("account", {}).get("id")
+        if conversation_id and account_id:
+            try:
+                await mark_manual_takeover(account_id, conversation_id)
+                log.info("manual takeover enabled conv=%s markers=%s", conversation_id, MANUAL_TAKEOVER_ENABLE_MARKERS)
+            except Exception as e:
+                log.error("failed to mark manual takeover conv=%s err=%s", conversation_id, e)
+        return {"status": "ignored", "reason": "manual takeover"}
+    if action == "disable":
+        conversation = payload.get("conversation", {})
+        conversation_id = conversation.get("display_id") or conversation.get("id")
+        account_id = payload.get("account", {}).get("id")
+        if conversation_id and account_id:
+            try:
+                await clear_manual_takeover(account_id, conversation_id)
+                log.info("manual takeover disabled conv=%s markers=%s", conversation_id, MANUAL_TAKEOVER_DISABLE_MARKERS)
+                await _resume_ai_on_last_incoming_if_needed(payload)
+            except Exception as e:
+                log.error("failed to disable manual takeover conv=%s err=%s", conversation_id, e)
+        return {"status": "ignored", "reason": "manual takeover disabled"}
+
     if message_type != "incoming":
         log.info("ignored: message_type=%s", message_type)
         return {"status": "ignored", "reason": "not incoming"}
@@ -761,6 +1178,14 @@ async def webhook(request: Request):
         log.warning("error: missing ids")
         return {"status": "error", "reason": "missing ids"}
 
+    session_id = f"chatwoot-{account_id}-{conversation_id}"
+    await _classify_first_message_topic(
+        account_id=account_id,
+        conversation_id=conversation_id,
+        session_id=session_id,
+        content=content,
+    )
+
     if not should_bot_handle(conversation):
         log.info(
             "ignored: status=%s ai_handoff=%s",
@@ -779,7 +1204,6 @@ async def webhook(request: Request):
         content[:80],
     )
 
-    session_id = f"chatwoot-{account_id}-{conversation_id}"
     system_prompt, prompt_source = await _resolve_system_prompt(
         account_id=account_id,
         inbox_id=inbox_id,
