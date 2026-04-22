@@ -55,6 +55,29 @@ class TopicClassificationTests(unittest.IsolatedAsyncioTestCase):
             await main._classify_first_message_topic(2, 21, "session", "нужно отменить автопродление")
             classify_mock.assert_not_called()
 
+    def test_acceptable_topic_rejects_short_keyword_pairs(self):
+        self.assertFalse(main._is_acceptable_topic_name("VPN iPhone"))
+        self.assertFalse(main._is_acceptable_topic_name("Подписка"))
+        self.assertFalse(main._is_acceptable_topic_name("Деньги"))
+        self.assertFalse(main._is_acceptable_topic_name("VPN Android"))
+
+    def test_acceptable_topic_accepts_descriptive_names(self):
+        self.assertTrue(main._is_acceptable_topic_name("VPN не работает на iPhone"))
+        self.assertTrue(main._is_acceptable_topic_name("Возврат денег за подписку"))
+        self.assertTrue(main._is_acceptable_topic_name("Не могу оплатить подписку"))
+        self.assertTrue(main._is_acceptable_topic_name("Настройка VPN на Android"))
+        self.assertTrue(main._is_acceptable_topic_name("Отмена автопродления подписки"))
+
+    def test_polish_topic_name_trims_and_capitalises(self):
+        self.assertEqual(
+            main._polish_topic_name('  "не работает vpn"  '),
+            "Не работает vpn",
+        )
+        self.assertEqual(
+            main._polish_topic_name("Возврат денег за подписку."),
+            "Возврат денег за подписку",
+        )
+
     async def test_classify_does_not_raise_on_error(self):
         with patch.object(main, "_fetch_topic_context", AsyncMock(return_value={
             "support_topic": None,

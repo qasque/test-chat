@@ -415,6 +415,91 @@ def _extract_json_object(text: str) -> dict | None:
         return None
 
 
+# Topic names must describe the customer's intent (problem/request), not be
+# a bag of keywords. We reject bare 1–2 word titles and specific known-bad
+# patterns so the classifier can't fall back to something like "VPN iPhone".
+_TOPIC_MIN_WORDS = 3
+_TOPIC_MIN_CHARS = 10
+_BAD_TOPIC_EXACT = frozenset(
+    w.lower()
+    for w in (
+        "vpn",
+        "подписка",
+        "деньги",
+        "оплата",
+        "ошибка",
+        "поддержка",
+        "возврат",
+        "vpn iphone",
+        "vpn айфон",
+        "vpn android",
+        "vpn андроид",
+        "iphone vpn",
+        "айфон vpn",
+    )
+)
+# Minimal action-verb / request hints a decent topic should contain.
+_TOPIC_ACTION_HINTS = (
+    "не работ",
+    "не могу",
+    "не получ",
+    "не удаёт",
+    "не удает",
+    "не открыв",
+    "не подключ",
+    "не захо",
+    "не прих",
+    "не отправ",
+    "проблем",
+    "ошибк",
+    "вопрос",
+    "как ",
+    "помог",
+    "настро",
+    "подключ",
+    "оплат",
+    "возврат",
+    "отмен",
+    "вернут",
+    "восстан",
+    "измен",
+    "удал",
+    "сброс",
+    "замен",
+    "перенос",
+    "регистрац",
+    "актив",
+    "продл",
+    "скорост",
+    "баланс",
+    "тариф",
+    "промокод",
+    "техподдерж",
+)
+
+
+def _is_acceptable_topic_name(name: str) -> bool:
+    if not isinstance(name, str):
+        return False
+    candidate = name.strip()
+    if len(candidate) < _TOPIC_MIN_CHARS:
+        return False
+    lowered = candidate.lower()
+    if lowered in _BAD_TOPIC_EXACT:
+        return False
+    words = [w for w in re.split(r"\s+", candidate) if w]
+    if len(words) < _TOPIC_MIN_WORDS:
+        return False
+    return any(hint in lowered for hint in _TOPIC_ACTION_HINTS)
+
+
+def _polish_topic_name(name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", name).strip().strip('"').strip("'").rstrip(".")
+    if not cleaned:
+        return cleaned
+    return cleaned[0].upper() + cleaned[1:]
+
+
 async def _fetch_topic_context(account_id: int, conversation_id: int) -> dict | None:
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/topic_classification"
     try:
@@ -461,15 +546,38 @@ async def _classify_topic_with_openclaw(session_id: str, message: str, topics: l
     known_topics = "\n".join(topic_lines) if topic_lines else "Список пуст."
 
     system_prompt = (
-        "Ты классифицируешь обращение в категорию поддержки. "
-        "Верни строго JSON без markdown: "
-        '{"existing_topic_id": <id|null>, "new_topic_name": "<короткая_категория_или_null>"}. '
-        "Если есть близкая категория в списке — используй existing_topic_id. "
-        "Если нет подходящей — existing_topic_id=null и задай короткое new_topic_name."
+        "Ты — классификатор тематики обращений в поддержку VPN‑сервиса.\n"
+        "Задача: по сообщению клиента определить ТЕМУ ОБРАЩЕНИЯ — то, "
+        "ЧТО ИМЕННО он хочет сделать или на что жалуется, а не ключевые слова.\n\n"
+        "Формат ответа: строго один JSON без markdown и без комментариев:\n"
+        '{"existing_topic_id": <id|null>, "new_topic_name": "<строка|null>"}\n\n'
+        "Правила для темы (new_topic_name):\n"
+        "1. Формулировка описывает ПРОБЛЕМУ или ЗАПРОС клиента. В ней должно быть "
+        "действие/состояние: «не работает», «не могу…», «как настроить…», «возврат…», "
+        "«оплата…», «ошибка…», «проблема с…», «подключение к…», «отмена…».\n"
+        "2. Длина — от 3 до 7 слов, с большой буквы, без эмодзи, без кавычек, без точки в конце.\n"
+        "3. Не использовать расплывчатые двухсловные заголовки только из ключевых слов "
+        "(«VPN iPhone», «Подписка», «Деньги», «Ошибка», «Поддержка»). У темы должен быть смысл, "
+        "понятный оператору без чтения диалога.\n"
+        "4. Если клиент задаёт несколько вопросов — бери главный, тот, ради которого он написал.\n\n"
+        "Когда использовать existing_topic_id:\n"
+        "— Существующая тема по СМЫСЛУ совпадает с проблемой клиента (одинаковое действие и предмет). "
+        "Совпадение только по одному слову («VPN», «подписка») — НЕ повод брать существующую.\n"
+        "— Если существующая тема названа плохо (только ключевые слова, без действия), "
+        "не используй её: выставь existing_topic_id=null и предложи нормальное new_topic_name.\n\n"
+        "Хорошие примеры тем:\n"
+        "— «VPN не работает на iPhone»\n"
+        "— «Возврат денег за подписку»\n"
+        "— «Не могу оплатить подписку»\n"
+        "— «Настройка VPN на Android»\n"
+        "— «Отмена автопродления подписки»\n"
+        "— «Низкая скорость VPN»\n"
+        "— «Не приходит код подтверждения»\n"
+        "— «Ошибка при подключении к серверу»\n"
     )
     user_prompt = (
-        f"Сообщение пользователя:\n{message}\n\n"
-        f"Существующие категории:\n{known_topics}\n"
+        f"Сообщение клиента:\n{message}\n\n"
+        f"Существующие темы (id: name):\n{known_topics}\n"
     )
     payload = {
         "model": OPENCLAW_MODEL,
@@ -489,13 +597,22 @@ async def _classify_topic_with_openclaw(session_id: str, message: str, topics: l
     text = _chat_completion_text(data)
     parsed = _extract_json_object(text) or {}
     existing_id = parsed.get("existing_topic_id")
-    new_topic_name = (parsed.get("new_topic_name") or "").strip()
+    new_topic_name = (parsed.get("new_topic_name") or "").strip().strip('"').strip()
     try:
         existing_id = int(existing_id) if existing_id is not None else None
     except Exception:
         existing_id = None
+    if not existing_id and new_topic_name and not _is_acceptable_topic_name(new_topic_name):
+        log.warning(
+            "topic classification rejected low-quality name='%s' session=%s",
+            new_topic_name,
+            session_id,
+        )
+        new_topic_name = None
     if not existing_id and not new_topic_name:
         return None, None
+    if new_topic_name:
+        new_topic_name = _polish_topic_name(new_topic_name)
     return existing_id, new_topic_name or None
 
 
