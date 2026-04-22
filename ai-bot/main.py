@@ -62,6 +62,31 @@ DEFAULT_AI_SYSTEM_PROMPT = """Ты — ассистент поддержки в 
 
 HANDOFF_MARKER = "[HANDOFF]"
 HANDOFF_MESSAGE = "Перевожу вас на оператора, ожидайте..."
+# Some prompts make the model deliver a full handoff reply to the user but
+# forget the explicit [HANDOFF] marker, which used to leave the conversation
+# silently stuck with the bot. Treat clear handoff phrasing as an implicit
+# marker so the conversation actually escalates to a human.
+HANDOFF_REPLY_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE | re.UNICODE)
+    for p in (
+        r"передан[аоы]?\s+оператор",
+        r"переда(?:ю|ём|ем|м)\s+(?:вас\s+)?(?:на|к)\s*оператор",
+        r"перевожу\s+(?:вас\s+)?(?:на|к)?\s*оператор",
+        r"переклю[чш]а(?:ю|ем)\s+(?:вас\s+)?(?:на|к)\s+оператор",
+        r"свяж(?:у|ем|ет)\s+(?:вас\s+)?с\s+оператор",
+        r"соединя(?:ю|ем)\s+(?:вас\s+)?(?:с\s+)?оператор",
+        r"ожидайте\s+оператор",
+        r"ваш\s+запрос\s+передан",
+        r"transferring\s+to\s+(?:a\s+)?human",
+        r"handing\s+(?:you\s+)?off\s+to",
+    )
+)
+
+
+def _looks_like_handoff_reply(text: str) -> bool:
+    if not text:
+        return False
+    return any(p.search(text) for p in HANDOFF_REPLY_PATTERNS)
 VOICE_STT_FALLBACK_MESSAGE = (
     "Не удалось распознать голосовое сообщение. "
     "Пожалуйста, напишите ваш вопрос текстом."
@@ -1352,15 +1377,34 @@ async def webhook(request: Request):
         await handoff_to_human(account_id, conversation_id)
         return {"status": "error", "reason": "empty_ai_reply"}
 
-    needs_handoff = HANDOFF_MARKER in ai_reply
+    explicit_handoff = HANDOFF_MARKER in ai_reply
     clean_reply = ai_reply.replace(HANDOFF_MARKER, "").strip()
+    inferred_handoff = False
+    if not explicit_handoff and _looks_like_handoff_reply(clean_reply):
+        inferred_handoff = True
+        log.info(
+            "handoff inferred from AI reply phrasing conv=%s reply_head='%s'",
+            conversation_id,
+            clean_reply[:80],
+        )
+
+    needs_handoff = explicit_handoff or inferred_handoff
 
     if needs_handoff:
         if clean_reply:
             await send_reply(account_id, conversation_id, clean_reply)
-        await send_reply(account_id, conversation_id, HANDOFF_MESSAGE)
+        # Only send the canned notice when the handoff was signalled by the
+        # explicit marker. If we inferred it from the AI's own phrasing, the
+        # user already got a proper message and doesn't need a duplicate.
+        if explicit_handoff:
+            await send_reply(account_id, conversation_id, HANDOFF_MESSAGE)
         await handoff_to_human(account_id, conversation_id)
-        log.info("Handoff conv=%s", conversation_id)
+        log.info(
+            "Handoff conv=%s explicit=%s inferred=%s",
+            conversation_id,
+            explicit_handoff,
+            inferred_handoff,
+        )
     else:
         await send_reply(account_id, conversation_id, ai_reply)
 
