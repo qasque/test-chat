@@ -193,11 +193,16 @@ async def _resolve_chatwoot_prompt(
     resp.raise_for_status()
 
     data = resp.json() if resp.content else {}
-    prompt_text = (data.get("prompt_text") or "").strip()
+    # Chatwoot wraps prompt payload as {"payload": {...}}
+    payload = data.get("payload") if isinstance(data, dict) else None
+    if not isinstance(payload, dict):
+        payload = data if isinstance(data, dict) else {}
+
+    prompt_text = (payload.get("prompt_text") or "").strip()
     if not prompt_text:
         return None, None
 
-    resolved_source_id = data.get("source_id")
+    resolved_source_id = payload.get("source_id")
     source_tag = "chatwoot_source" if resolved_source_id else "chatwoot_default"
     return prompt_text, source_tag
 
