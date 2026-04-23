@@ -302,6 +302,15 @@ def _is_voice_placeholder_content(content: str) -> bool:
 
 # После handoff выставляем в диалоге, чтобы бот не отвечал поверх оператора.
 AI_HANDOFF_ATTR = "ai_handoff"
+# Outage mode: while active, bot sends the outage text on every incoming
+# customer message instead of asking LLM, until an operator disables it.
+AI_OUTAGE_ACTIVE_ATTR = "ai_outage_mode"
+AI_OUTAGE_MESSAGE_ATTR = "ai_outage_message"
+DEFAULT_OUTAGE_AUTOREPLY = (
+    os.environ.get("OUTAGE_AUTOREPLY_MESSAGE")
+    or "Сейчас наблюдаются массовые сбои, работаем над восстановлением. "
+       "Пожалуйста, попробуйте позже."
+).strip()
 # Стандартный путь в docker-compose (volume): ./config/ai-system-prompt.txt → контейнер
 DEFAULT_PROMPT_FILE = "/app/config/ai-system-prompt.txt"
 
@@ -314,6 +323,26 @@ def _conversation_handed_off(conversation: dict) -> bool:
     if isinstance(val, str) and val.strip().lower() in ("true", "1", "yes"):
         return True
     return False
+
+
+def _is_true_like(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "on"):
+        return True
+    return False
+
+
+def _conversation_outage_autoreply(conversation: dict) -> str | None:
+    if not isinstance(conversation, dict):
+        return None
+    custom = conversation.get("custom_attributes") or {}
+    if not isinstance(custom, dict):
+        return None
+    if not _is_true_like(custom.get(AI_OUTAGE_ACTIVE_ATTR)):
+        return None
+    text = (custom.get(AI_OUTAGE_MESSAGE_ATTR) or "").strip()
+    return text or DEFAULT_OUTAGE_AUTOREPLY
 
 
 def _resolve_local_system_prompt() -> tuple[str, str]:
@@ -850,24 +879,30 @@ async def handoff_to_human(account_id: int, conversation_id: int):
             )
 
 
-async def mark_manual_takeover(account_id: int, conversation_id: int):
-    # Operator is taking over — make the conversation visible in their default views.
-    try:
-        await _set_conversation_status(account_id, conversation_id, "open")
-    except Exception as e:
-        log.warning(
-            "manual takeover: failed to set status=open conv=%s err=%s",
-            conversation_id,
-            e,
-        )
-    await _set_conversation_custom_attributes(
-        account_id, conversation_id, {AI_HANDOFF_ATTR: True}
-    )
+async def mark_manual_takeover(
+    account_id: int,
+    conversation_id: int,
+    outage_reply_text: str | None = None,
+):
+    # Outage mode: keep the dialog parked (pending + unassigned) and force
+    # an outage autoresponse for each next incoming customer message.
+    attrs = {AI_HANDOFF_ATTR: True}
+    if outage_reply_text is not None:
+        attrs[AI_OUTAGE_ACTIVE_ATTR] = True
+        attrs[AI_OUTAGE_MESSAGE_ATTR] = outage_reply_text.strip() or DEFAULT_OUTAGE_AUTOREPLY
+    await _set_conversation_custom_attributes(account_id, conversation_id, attrs)
+    await park_conversation_for_ai(account_id, conversation_id, None)
 
 
 async def clear_manual_takeover(account_id: int, conversation_id: int):
     await _set_conversation_custom_attributes(
-        account_id, conversation_id, {AI_HANDOFF_ATTR: False}
+        account_id,
+        conversation_id,
+        {
+            AI_HANDOFF_ATTR: False,
+            AI_OUTAGE_ACTIVE_ATTR: False,
+            AI_OUTAGE_MESSAGE_ATTR: None,
+        },
     )
 
 
@@ -1441,13 +1476,23 @@ async def webhook(request: Request):
         conversation = payload.get("conversation", {})
         conversation_id = conversation.get("display_id") or conversation.get("id")
         account_id = payload.get("account", {}).get("id")
+        outage_text = _payload_content(payload)
         if conversation_id and account_id:
             try:
-                await mark_manual_takeover(account_id, conversation_id)
-                log.info("manual takeover enabled conv=%s markers=%s", conversation_id, MANUAL_TAKEOVER_ENABLE_MARKERS)
+                await mark_manual_takeover(
+                    account_id,
+                    conversation_id,
+                    outage_reply_text=outage_text,
+                )
+                log.info(
+                    "outage mode enabled conv=%s markers=%s text='%s'",
+                    conversation_id,
+                    MANUAL_TAKEOVER_ENABLE_MARKERS,
+                    outage_text[:120],
+                )
             except Exception as e:
                 log.error("failed to mark manual takeover conv=%s err=%s", conversation_id, e)
-        return {"status": "ignored", "reason": "manual takeover"}
+        return {"status": "ignored", "reason": "outage mode enabled"}
     if action == "disable":
         conversation = payload.get("conversation", {})
         conversation_id = conversation.get("display_id") or conversation.get("id")
@@ -1514,6 +1559,17 @@ async def webhook(request: Request):
         return {"status": "error", "reason": "missing ids"}
 
     session_id = f"chatwoot-{account_id}-{conversation_id}"
+
+    outage_autoreply = _conversation_outage_autoreply(conversation)
+    if outage_autoreply:
+        await park_conversation_for_ai(account_id, conversation_id, conversation)
+        await send_reply(account_id, conversation_id, outage_autoreply)
+        log.info(
+            "outage autoresponse sent conv=%s text='%s'",
+            conversation_id,
+            outage_autoreply[:120],
+        )
+        return {"status": "ok", "outage_autoreply": True}
 
     # Gate the bot FIRST. On manual takeover / handoff / bad status we must
     # neither classify nor park — both cost extra RTT to Chatwoot/OpenClaw.
