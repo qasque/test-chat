@@ -989,6 +989,10 @@ async def _resume_ai_on_last_incoming_if_needed(payload: dict):
     # AI resumes ownership of the dialog — hide it from operators again.
     await park_conversation_for_ai(account_id, conversation_id, conversation)
     await send_reply(account_id, conversation_id, ai_reply)
+    # Some inboxes can auto-open pending threads on outgoing human-like
+    # messages (depends on Captain/assignment internals). Re-park with a
+    # forced status refresh to keep the dialog out of "Mine".
+    await park_conversation_for_ai(account_id, conversation_id, None)
     log.info(
         "manual takeover disabled conv=%s auto-resumed on last incoming msg_id=%s prompt_origin=%s",
         conversation_id,
@@ -1613,6 +1617,10 @@ async def webhook(request: Request):
         )
     else:
         await send_reply(account_id, conversation_id, ai_reply)
+        # In WebWidget/LK flows Chatwoot can reopen the conversation right after
+        # outgoing messages depending on assignment/bot internals. Force a
+        # second park to guarantee pending + unassigned until explicit handoff.
+        await park_conversation_for_ai(account_id, conversation_id, None)
     t_after_send = time.perf_counter()
 
     # Topic classification is report metadata — the user must not wait for it.
