@@ -345,6 +345,73 @@ def _conversation_outage_autoreply(conversation: dict) -> str | None:
     return text or DEFAULT_OUTAGE_AUTOREPLY
 
 
+# «Сбой: автоответ» в дашборде Chatwoot (account.custom_attributes.outage_auto_reply)
+OUTAGE_CFG_CACHE_TTL = float((os.environ.get("OUTAGE_CFG_CACHE_TTL") or "4").strip() or 4)
+_outage_cfg_cache: dict[int, tuple[float, dict | None]] = {}
+
+
+async def _fetch_outage_auto_reply_api(account_id: int) -> dict | None:
+    if not BOT_TOKEN or not _http:
+        return None
+    path = f"/api/v1/accounts/{account_id}/outage_auto_reply"
+    try:
+        r = await _http.get(
+            f"{CHATWOOT_URL}{path}",
+            headers={"api_access_token": BOT_TOKEN},
+            timeout=5.0,
+        )
+        if r.status_code != 200:
+            log.warning(
+                "outage_auto_reply API status=%s account=%s",
+                r.status_code,
+                account_id,
+            )
+            return None
+        return r.json() if r.content else None
+    except Exception as e:
+        log.warning("outage_auto_reply API error account=%s err=%s", account_id, e)
+        return None
+
+
+async def _account_outage_reply(
+    account_id: int, inbox_id: int | None
+) -> str | None:
+    """
+    Вернёт текст автоответа, если в аккаунте включён «Сбой: автоответ»
+    и `inbox_id` входит в настроенные инбоксы. Иначе None.
+
+    Для совместимости с bool-проверкой в вебхуке хватает: None = не блокируем,
+    любая строка (в т.ч. пустая после strip) — блокируем LLM.
+    """
+    if inbox_id is None:
+        return None
+    import time
+
+    now = time.monotonic()
+    ent = _outage_cfg_cache.get(account_id)
+    if ent and ent[0] > now:
+        data = ent[1]
+    else:
+        data = await _fetch_outage_auto_reply_api(account_id)
+        _outage_cfg_cache[account_id] = (now + OUTAGE_CFG_CACHE_TTL, data)
+
+    if not data or not isinstance(data, dict):
+        return None
+    if not _is_true_like(data.get("enabled")):
+        return None
+    raw_ids = data.get("inbox_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return None
+    try:
+        ids = {int(x) for x in raw_ids if x is not None}
+    except (TypeError, ValueError):
+        return None
+    if inbox_id not in ids:
+        return None
+    msg = (data.get("message") or "").strip()
+    return msg or DEFAULT_OUTAGE_AUTOREPLY
+
+
 def _resolve_local_system_prompt() -> tuple[str, str]:
     """Возвращает (текст, источник: file|env|default)."""
     env_path = (os.environ.get("AI_BOT_SYSTEM_PROMPT_FILE") or "").strip()
@@ -988,6 +1055,75 @@ async def _conversation_messages(account_id: int, conversation_id: int) -> list[
     return payload
 
 
+AI_HISTORY_LIMIT = int((os.environ.get("AI_HISTORY_LIMIT") or "5").strip() or 5)
+AI_HISTORY_MAX_CHARS = int((os.environ.get("AI_HISTORY_MAX_CHARS") or "1200").strip() or 1200)
+
+
+def _normalize_history_content(raw: str, limit: int = AI_HISTORY_MAX_CHARS) -> str:
+    text = (raw or "").strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+async def _build_recent_history(
+    account_id: int,
+    conversation_id: int,
+    exclude_message_id: int | str | None = None,
+    limit: int = AI_HISTORY_LIMIT,
+) -> list[dict]:
+    """
+    Последние N пар «клиент ↔ ассистент/оператор», в хронологическом порядке,
+    отфильтровав приватные/пустые/служебные записи и сообщение, которое сейчас
+    обрабатывается (чтобы не дублировалось в payload к LLM).
+    """
+    if limit <= 0:
+        return []
+    try:
+        messages = await _conversation_messages(account_id, conversation_id)
+    except Exception as e:
+        log.warning(
+            "history fetch failed conv=%s account=%s err=%s",
+            conversation_id,
+            account_id,
+            e,
+        )
+        return []
+
+    try:
+        skip_id = int(exclude_message_id) if exclude_message_id is not None else None
+    except (TypeError, ValueError):
+        skip_id = None
+
+    picked: list[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if skip_id is not None and msg.get("id") == skip_id:
+            continue
+        if msg.get("private"):
+            continue
+        content_type = (msg.get("content_type") or "").lower()
+        if content_type and content_type != "text":
+            continue
+        content = _normalize_history_content(msg.get("content") or "")
+        if not content:
+            continue
+        mt = msg.get("message_type")
+        if mt in (0, "incoming"):
+            role = "user"
+        elif mt in (1, "outgoing"):
+            role = "assistant"
+        else:
+            continue
+        picked.append({"role": role, "content": content})
+        if len(picked) >= limit:
+            break
+
+    picked.reverse()
+    return picked
+
+
 async def _resume_ai_on_last_incoming_if_needed(payload: dict):
     conversation = payload.get("conversation", {})
     conversation_id = conversation.get("display_id") or conversation.get("id")
@@ -1017,7 +1153,17 @@ async def _resume_ai_on_last_incoming_if_needed(payload: dict):
         source_id=source_id,
     )
     session_id = f"chatwoot-{account_id}-{conversation_id}"
-    ai_reply = await ask_openclaw(session_id, incoming_content, system_prompt)
+    history = await _build_recent_history(
+        account_id,
+        conversation_id,
+        exclude_message_id=last_incoming.get("id") if isinstance(last_incoming, dict) else None,
+    )
+    ai_reply = await ask_openclaw(
+        session_id,
+        incoming_content,
+        system_prompt,
+        history=history,
+    )
     if not (ai_reply or "").strip():
         log.warning("manual resume empty reply conv=%s", conversation_id)
         return
@@ -1101,7 +1247,16 @@ def _chat_completion_text(data: dict) -> str:
     return (str(content) if content is not None else "").strip()
 
 
-async def ask_openclaw(session_id: str, message: str, system_prompt: str) -> str:
+async def ask_openclaw(
+    session_id: str,
+    message: str,
+    system_prompt: str,
+    history: list[dict] | None = None,
+) -> str:
+    """
+    `history` — список сообщений формата [{role, content}], передаётся до
+    последнего user-сообщения. Ожидаются уже усечённые/очищенные записи.
+    """
     url = f"{OPENCLAW_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENCLAW_TOKEN}",
@@ -1112,6 +1267,14 @@ async def ask_openclaw(session_id: str, message: str, system_prompt: str) -> str
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
+    if history:
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            role = entry.get("role")
+            content = entry.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                messages.append({"role": role, "content": content.strip()})
     messages.append({"role": "user", "content": message})
     payload = {
         "model": OPENCLAW_MODEL,
@@ -1571,6 +1734,32 @@ async def webhook(request: Request):
         )
         return {"status": "ok", "outage_autoreply": True}
 
+    # Аккаунтный «Сбой: автоответ» (страница /outage-auto-reply):
+    # 1) ai-bot НЕ зовёт LLM,
+    # 2) на КАЖДОЕ новое входящее шлём копипасту, настроенную в Chatwoot,
+    # 3) диалог остаётся «припаркованным» (pending + unassigned), операторы его
+    #    видят в отдельной подборке «На обработке ИИ»; всё, что вручную
+    #    ответит оператор, снимает парковку (см. should_bot_handle).
+    outage_text = await _account_outage_reply(account_id, inbox_id)
+    if outage_text is not None:
+        try:
+            await park_conversation_for_ai(account_id, conversation_id, conversation)
+            await send_reply(account_id, conversation_id, outage_text)
+            log.info(
+                "outage (account) reply sent conv=%s inbox=%s text='%s'",
+                conversation_id,
+                inbox_id,
+                outage_text[:120],
+            )
+        except Exception as e:
+            log.error(
+                "outage (account) reply failed conv=%s inbox=%s err=%s",
+                conversation_id,
+                inbox_id,
+                e,
+            )
+        return {"status": "ok", "outage_auto_reply": True}
+
     # Gate the bot FIRST. On manual takeover / handoff / bad status we must
     # neither classify nor park — both cost extra RTT to Chatwoot/OpenClaw.
     if not should_bot_handle(conversation):
@@ -1608,8 +1797,17 @@ async def webhook(request: Request):
             source_id=source_id,
         )
 
+    async def _do_history():
+        return await _build_recent_history(
+            account_id,
+            conversation_id,
+            exclude_message_id=payload.get("id"),
+        )
+
     t_before_parallel = time.perf_counter()
-    _, prompt_result = await asyncio.gather(_do_park(), _do_prompt())
+    _, prompt_result, history = await asyncio.gather(
+        _do_park(), _do_prompt(), _do_history()
+    )
     system_prompt, prompt_source = prompt_result
     t_after_parallel = time.perf_counter()
 
@@ -1622,9 +1820,20 @@ async def webhook(request: Request):
         len(system_prompt),
     )
 
+    log.info(
+        "history built conv=%s turns=%s",
+        conversation_id,
+        len(history) if isinstance(history, list) else 0,
+    )
+
     t_before_llm = time.perf_counter()
     try:
-        ai_reply = await ask_openclaw(session_id, content, system_prompt)
+        ai_reply = await ask_openclaw(
+            session_id,
+            content,
+            system_prompt,
+            history=history if isinstance(history, list) else None,
+        )
     except Exception as e:
         log.error("OpenClaw error: %s", e)
         await send_reply(account_id, conversation_id, "Произошла ошибка, перевожу на оператора...")
