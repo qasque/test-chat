@@ -1055,8 +1055,9 @@ async def _conversation_messages(account_id: int, conversation_id: int) -> list[
     return payload
 
 
+AI_HISTORY_ENABLED = _is_true_like(os.environ.get("AI_HISTORY_ENABLED", "1"))
 AI_HISTORY_LIMIT = int((os.environ.get("AI_HISTORY_LIMIT") or "5").strip() or 5)
-AI_HISTORY_MAX_CHARS = int((os.environ.get("AI_HISTORY_MAX_CHARS") or "1200").strip() or 1200)
+AI_HISTORY_MAX_CHARS = int((os.environ.get("AI_HISTORY_MAX_CHARS") or "600").strip() or 600)
 
 
 def _normalize_history_content(raw: str, limit: int = AI_HISTORY_MAX_CHARS) -> str:
@@ -1077,7 +1078,7 @@ async def _build_recent_history(
     отфильтровав приватные/пустые/служебные записи и сообщение, которое сейчас
     обрабатывается (чтобы не дублировалось в payload к LLM).
     """
-    if limit <= 0:
+    if limit <= 0 or not AI_HISTORY_ENABLED:
         return []
     try:
         messages = await _conversation_messages(account_id, conversation_id)
