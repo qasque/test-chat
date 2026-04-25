@@ -325,6 +325,28 @@ def _conversation_handed_off(conversation: dict) -> bool:
     return False
 
 
+BOT_SENDER_TYPES = {"agentbot", "agent_bot"}
+HUMAN_SENDER_TYPES = {"user", "agent", "administrator"}
+
+
+def _sender_type_from(payload_or_sender: dict) -> str:
+    if not isinstance(payload_or_sender, dict):
+        return ""
+    sender = payload_or_sender.get("sender") or payload_or_sender
+    if not isinstance(sender, dict):
+        sender = {}
+    raw = sender.get("type") or payload_or_sender.get("sender_type") or ""
+    return str(raw).strip().lower()
+
+
+def _is_bot_sender_type(sender_type: str) -> bool:
+    return sender_type in BOT_SENDER_TYPES
+
+
+def _is_human_sender_type(sender_type: str) -> bool:
+    return sender_type in HUMAN_SENDER_TYPES
+
+
 def _is_true_like(value) -> bool:
     if value is True:
         return True
@@ -535,11 +557,13 @@ async def _resolve_system_prompt(
 
 
 def should_bot_handle(conversation: dict) -> bool:
-    """Пока диалог открыт и бот сам не сделал handoff — отвечаем, даже если есть assignee."""
+    """Пока диалог открыт, не передан и не назначен оператору — отвечаем."""
     status = conversation.get("status")
     if status not in ("pending", "open"):
         return False
     if _conversation_handed_off(conversation):
+        return False
+    if _conversation_has_human_assignee(conversation):
         return False
     return True
 
@@ -849,6 +873,23 @@ def _conversation_assignee_id(conversation: dict) -> int | None:
         return None
 
 
+def _conversation_has_human_assignee(conversation: dict) -> bool:
+    """Treat any non-bot assignee as a human operator takeover."""
+    if not isinstance(conversation, dict):
+        return False
+
+    meta = conversation.get("meta") or {}
+    assignee = meta.get("assignee") if isinstance(meta, dict) else None
+    if isinstance(assignee, dict):
+        sender_type = _sender_type_from(assignee)
+        if _is_bot_sender_type(sender_type):
+            return False
+        if assignee.get("id"):
+            return True
+
+    return _conversation_assignee_id(conversation) is not None
+
+
 async def _set_conversation_status(account_id: int, conversation_id: int, status: str):
     await chatwoot_api(
         "POST",
@@ -946,6 +987,34 @@ async def handoff_to_human(account_id: int, conversation_id: int):
             )
 
 
+async def mark_operator_takeover(
+    account_id: int,
+    conversation_id: int,
+    *,
+    ensure_open: bool = True,
+):
+    """Persist that a real operator owns the dialog so AI will stay silent."""
+    if ensure_open:
+        try:
+            await _set_conversation_status(account_id, conversation_id, "open")
+        except Exception as e:
+            log.warning(
+                "operator takeover: failed to set status=open conv=%s err=%s",
+                conversation_id,
+                e,
+            )
+
+    await _set_conversation_custom_attributes(
+        account_id,
+        conversation_id,
+        {
+            AI_HANDOFF_ATTR: True,
+            AI_OUTAGE_ACTIVE_ATTR: False,
+            AI_OUTAGE_MESSAGE_ATTR: None,
+        },
+    )
+
+
 async def mark_manual_takeover(
     account_id: int,
     conversation_id: int,
@@ -990,13 +1059,14 @@ def _contains_any_marker(text: str, markers: tuple[str, ...]) -> bool:
 def _is_human_outgoing_payload(payload: dict) -> bool:
     if payload.get("message_type") != "outgoing":
         return False
-
-    sender = payload.get("sender") or {}
-    sender_type = str(sender.get("type") or payload.get("sender_type") or "").lower()
-    # Ручной перехват только от живого оператора/агента, не от agent_bot.
-    if sender_type in {"agentbot", "agent_bot"}:
+    if payload.get("private") is True:
         return False
-    return True
+
+    sender_type = _sender_type_from(payload)
+    # Ручной перехват только от живого оператора/агента, не от agent_bot.
+    if _is_bot_sender_type(sender_type):
+        return False
+    return _is_human_sender_type(sender_type)
 
 
 def _manual_takeover_action(payload: dict) -> str | None:
@@ -1022,9 +1092,8 @@ def _is_human_reply_message(msg: dict, control_msg_id: int | None = None) -> boo
         return False
     if control_msg_id and msg.get("id") == control_msg_id:
         return False
-    sender = msg.get("sender") or {}
-    sender_type = str(sender.get("type") or "").lower()
-    if sender_type in {"agent_bot", "agentbot"}:
+    sender_type = _sender_type_from(msg)
+    if _is_bot_sender_type(sender_type):
         return False
     # Учитываем только реальные ответы оператора, не контрольные маркеры.
     content = (msg.get("content") or "").strip()
@@ -1670,6 +1739,26 @@ async def webhook(request: Request):
                 log.error("failed to disable manual takeover conv=%s err=%s", conversation_id, e)
         return {"status": "ignored", "reason": "manual takeover disabled"}
 
+    if _is_human_outgoing_payload(payload):
+        conversation = payload.get("conversation", {})
+        conversation_id = conversation.get("display_id") or conversation.get("id")
+        account_id = payload.get("account", {}).get("id")
+        if conversation_id and account_id:
+            try:
+                await mark_operator_takeover(
+                    account_id,
+                    conversation_id,
+                    ensure_open=conversation.get("status") != "open",
+                )
+                log.info(
+                    "operator takeover detected conv=%s sender_type=%s",
+                    conversation_id,
+                    _sender_type_from(payload),
+                )
+            except Exception as e:
+                log.error("failed to mark operator takeover conv=%s err=%s", conversation_id, e)
+        return {"status": "ignored", "reason": "operator takeover"}
+
     if message_type != "incoming":
         log.info("ignored: message_type=%s", message_type)
         return {"status": "ignored", "reason": "not incoming"}
@@ -1723,6 +1812,26 @@ async def webhook(request: Request):
         return {"status": "error", "reason": "missing ids"}
 
     session_id = f"chatwoot-{account_id}-{conversation_id}"
+
+    if _conversation_has_human_assignee(conversation):
+        try:
+            await mark_operator_takeover(
+                account_id,
+                conversation_id,
+                ensure_open=conversation.get("status") != "open",
+            )
+        except Exception as e:
+            log.error(
+                "failed to persist assigned operator takeover conv=%s err=%s",
+                conversation_id,
+                e,
+            )
+        log.info(
+            "ignored: human assignee owns conv=%s assignee=%s",
+            conversation_id,
+            _conversation_assignee_id(conversation),
+        )
+        return {"status": "ignored", "reason": "assigned_to_operator"}
 
     outage_autoreply = _conversation_outage_autoreply(conversation)
     if outage_autoreply:
