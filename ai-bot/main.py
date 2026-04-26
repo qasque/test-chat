@@ -25,6 +25,12 @@ _http: httpx.AsyncClient | None = None
 # unreachable (single-worker is still safe that way).
 _redis = None
 
+# User-id, под которым ai-bot ходит в Chatwoot (BOT_TOKEN). Нужен, чтобы НЕ
+# считать собственные исходящие сообщения бота за «ответ оператора», а свои же
+# назначения (assignee=bot) — за человеческого assignee. Резолвится на старте
+# через /api/v1/profile. Можно переопределить env AI_BOT_SELF_USER_ID.
+_BOT_USER_ID: int | None = None
+
 
 REDIS_URL = (os.environ.get("REDIS_URL") or "").strip()
 
@@ -57,15 +63,67 @@ def _redis_url_for_log(url: str) -> str:
         return "redis"
 
 
+async def _resolve_bot_user_id() -> int | None:
+    """
+    Узнать id пользователя, под которым выпущен BOT_TOKEN. Нужно, чтобы отличать
+    исходящие сообщения самого ai-bot от ответов живого оператора (Chatwoot
+    выставляет sender_type=user в обоих случаях, если бот ходит User-токеном,
+    а не AgentBotAccessToken).
+    """
+    override = (os.environ.get("AI_BOT_SELF_USER_ID") or "").strip()
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            log.warning(
+                "AI_BOT_SELF_USER_ID ignored: not an int (%r)", override
+            )
+    if not BOT_TOKEN or _http is None:
+        return None
+    try:
+        r = await _http.get(
+            f"{CHATWOOT_URL}/api/v1/profile",
+            headers={"api_access_token": BOT_TOKEN},
+            timeout=5.0,
+        )
+        if r.status_code != 200:
+            log.warning(
+                "ai-bot self-user lookup failed status=%s body=%r",
+                r.status_code,
+                (r.text or "")[:200],
+            )
+            return None
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict):
+            return None
+        uid = data.get("id")
+        if isinstance(uid, int):
+            return uid
+        if isinstance(uid, str) and uid.strip().isdigit():
+            return int(uid.strip())
+    except Exception as e:
+        log.warning("ai-bot self-user lookup error: %s", e)
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    global _http, _redis
+    global _http, _redis, _BOT_USER_ID
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=30),
         follow_redirects=True,
     )
     _redis = await _init_redis()
+    _BOT_USER_ID = await _resolve_bot_user_id()
+    if _BOT_USER_ID:
+        log.info("ai-bot self user resolved id=%s", _BOT_USER_ID)
+    else:
+        log.warning(
+            "ai-bot self user id NOT resolved; outgoing bot messages may be "
+            "mistaken for operator takeover. Set AI_BOT_SELF_USER_ID in .env "
+            "to fix without depending on /api/v1/profile."
+        )
     try:
         yield
     finally:
@@ -345,6 +403,39 @@ def _is_bot_sender_type(sender_type: str) -> bool:
 
 def _is_human_sender_type(sender_type: str) -> bool:
     return sender_type in HUMAN_SENDER_TYPES
+
+
+def _sender_id_from(payload_or_sender: dict) -> int | None:
+    if not isinstance(payload_or_sender, dict):
+        return None
+    sender = payload_or_sender.get("sender") or payload_or_sender
+    if not isinstance(sender, dict):
+        return None
+    raw = sender.get("id")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_self_sender(payload_or_sender: dict) -> bool:
+    """True, если sender этого payload-а — это сам ai-bot (BOT_TOKEN user)."""
+    if _BOT_USER_ID is None:
+        return False
+    sid = _sender_id_from(payload_or_sender)
+    return sid is not None and sid == _BOT_USER_ID
+
+
+def _assignee_is_self(conversation: dict) -> bool:
+    """True, если диалог назначен на bot-юзера (auto-assignment + BOT_TOKEN)."""
+    if _BOT_USER_ID is None:
+        return False
+    if not isinstance(conversation, dict):
+        return False
+    aid = _conversation_assignee_id(conversation)
+    return aid is not None and aid == _BOT_USER_ID
 
 
 def _is_true_like(value) -> bool:
@@ -874,7 +965,7 @@ def _conversation_assignee_id(conversation: dict) -> int | None:
 
 
 def _conversation_has_human_assignee(conversation: dict) -> bool:
-    """Treat any non-bot assignee as a human operator takeover."""
+    """Treat any non-bot, non-self assignee as a human operator takeover."""
     if not isinstance(conversation, dict):
         return False
 
@@ -884,10 +975,19 @@ def _conversation_has_human_assignee(conversation: dict) -> bool:
         sender_type = _sender_type_from(assignee)
         if _is_bot_sender_type(sender_type):
             return False
+        # Если auto-assignment назначил диалог на самого бота (BOT_TOKEN user),
+        # это всё ещё AI-владение, а не человеческий takeover.
+        if _assignee_is_self(conversation):
+            return False
         if assignee.get("id"):
             return True
 
-    return _conversation_assignee_id(conversation) is not None
+    aid = _conversation_assignee_id(conversation)
+    if aid is None:
+        return False
+    if _BOT_USER_ID is not None and aid == _BOT_USER_ID:
+        return False
+    return True
 
 
 async def _set_conversation_status(account_id: int, conversation_id: int, status: str):
@@ -1062,6 +1162,12 @@ def _is_human_outgoing_payload(payload: dict) -> bool:
     if payload.get("private") is True:
         return False
 
+    # ai-bot ходит в Chatwoot User-токеном, поэтому его собственные сообщения
+    # приходят как sender_type=user. Без этой проверки бот «переводит сам себя
+    # на оператора» сразу после первого ответа клиенту.
+    if _is_self_sender(payload):
+        return False
+
     sender_type = _sender_type_from(payload)
     # Ручной перехват только от живого оператора/агента, не от agent_bot.
     if _is_bot_sender_type(sender_type):
@@ -1091,6 +1197,9 @@ def _is_human_reply_message(msg: dict, control_msg_id: int | None = None) -> boo
     if msg.get("private") is True:
         return False
     if control_msg_id and msg.get("id") == control_msg_id:
+        return False
+    # Сообщение, отправленное самим ai-bot, не считается ответом оператора.
+    if _is_self_sender(msg):
         return False
     sender_type = _sender_type_from(msg)
     if _is_bot_sender_type(sender_type):
