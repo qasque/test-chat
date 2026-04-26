@@ -43,9 +43,7 @@ apps/mobile/
 # Временный клон upstream Chatwoot для сверки патчей
 _cw_tmp/
 
-# Клон форка Chatwoot для сборки rails/sidekiq (см. docs/CHATWOOT-SOURCE.txt)
-chatwoot/
-!patches/chatwoot/
+# Сборка rails/sidekiq: context ./chatwoot — исходники в репозитории
 
 # Локальные скрипты монорепо (Flutter), на сервер не нужны
 scripts/clean-flutter-artifacts.ps1

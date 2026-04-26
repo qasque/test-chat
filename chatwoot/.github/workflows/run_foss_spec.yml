@@ -1,0 +1,139 @@
+name: Run Chatwoot CE spec
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - develop
+      - master
+  pull_request:
+  workflow_dispatch:
+
+# One active run per ref: newer pushes cancel older queued/in-progress runs (frees runner slots).
+concurrency:
+  group: foss-ce-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Отдельный workflow: .github/workflows/frontend-fe.yml (eslint + vitest без дубля pnpm install)
+  lint-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PRs need full history for base..head diff; shallow checkout on push (0 is falsy in GHA &&/||, so use fromJSON).
+          fetch-depth: ${{ fromJSON(github.event_name == 'pull_request' && '0' || '1') }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - name: Run Rubocop
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            mapfile -t files < <(git diff --name-only --diff-filter=ACMRT \
+              "${{ github.event.pull_request.base.sha }}" \
+              "${{ github.event.pull_request.head.sha }}" \
+              -- '*.rb' '*.rake' 'Gemfile' || true)
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "No Ruby files in this PR diff; skipping RuboCop."
+              exit 0
+            fi
+            bundle exec rubocop --parallel --force-exclusion "${files[@]}"
+          else
+            bundle exec rubocop --parallel
+          fi
+
+  # Backend tests with parallelization (after lint: avoids 17 simultaneous jobs and skips tests if RuboCop fails)
+  backend-tests:
+    needs: lint-backend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ci_node_total: [16]
+        ci_node_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ''
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --mount type=tmpfs,destination=/var/lib/postgresql/data
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install pnpm dependencies
+        run: pnpm i
+
+      - name: Strip enterprise code
+        run: |
+          rm -rf enterprise
+          rm -rf spec/enterprise
+
+      - name: Create database
+        run: bundle exec rake db:create
+
+      - name: Seed database
+        run: bundle exec rake db:schema:load
+
+      - name: Run backend tests (parallelized)
+        run: |
+          # Get all spec files and split them using round-robin distribution
+          # This ensures slow tests are distributed evenly across all nodes
+          SPEC_FILES=($(find spec -name '*_spec.rb' | sort))
+          TESTS=""
+
+          for i in "${!SPEC_FILES[@]}"; do
+            # Assign spec to this node if: index % total == node_index
+            if [ $(( i % ${{ matrix.ci_node_total }} )) -eq ${{ matrix.ci_node_index }} ]; then
+              TESTS="$TESTS ${SPEC_FILES[$i]}"
+            fi
+          done
+
+          if [ -n "$TESTS" ]; then
+            bundle exec rspec --profile=10 --format progress --format json --out tmp/rspec_results.json $TESTS
+          fi
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rspec-results-${{ matrix.ci_node_index }}
+          path: tmp/rspec_results.json
+
+      - name: Upload rails log folder
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: rails-log-folder-${{ matrix.ci_node_index }}
+          path: log

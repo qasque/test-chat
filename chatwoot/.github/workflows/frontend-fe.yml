@@ -1,0 +1,70 @@
+name: Frontend Lint & Test
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - 'app/javascript/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'vite.config.ts'
+      - 'vitest.setup.js'
+      - '.eslint*'
+      - 'eslint*'
+      - '.github/workflows/frontend-fe.yml'
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - 'app/javascript/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'vite.config.ts'
+      - 'vitest.setup.js'
+      - '.eslint*'
+      - 'eslint*'
+      - '.github/workflows/frontend-fe.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout (PR from fork)
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          fetch-depth: 1
+
+      - name: Checkout (push)
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run eslint
+        run: pnpm run eslint
+
+      # Без --coverage быстрее; при необходимости: локально pnpm run test:coverage или отдельный job
+      - name: Run frontend tests
+        run: pnpm run test
