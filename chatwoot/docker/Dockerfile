@@ -88,8 +88,8 @@ RUN if [ "$RAILS_ENV" = "production" ] && [ "$SKIP_ASSET_PRECOMPILE" != "true" ]
   && rm -rf spec node_modules tmp/cache; \
   fi
 
-# Generate .git_sha file with current commit hash
-RUN git rev-parse HEAD > /app/.git_sha
+# .git_sha (monorepo context often has no .git under chatwoot → git rev-parse would fail)
+RUN sh -c 'git -C /app rev-parse HEAD > /app/.git_sha 2>/dev/null || echo unknown > /app/.git_sha'
 
 # Remove unnecessary files
 RUN rm -rf /gems/ruby/3.4.0/cache/*.gem \
